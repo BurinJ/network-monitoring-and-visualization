@@ -1,42 +1,39 @@
-import { useState } from 'react'; // Import useState
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import Overview from './pages/Overview.jsx';
-import Reports from './pages/Reports.jsx';
-import ProbeDetails from './pages/ProbeDetails.jsx';
-import Sidebar from './components/Layout/Sidebar.jsx';
+import { useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import Sidebar from './components/Sidebar';
 
-// const Overview = () => <div className="p-8"><h2 className="text-2xl font-bold">Overview Dashboard</h2></div>;
-// const Reports = () => <div className="p-8"><h2 className="text-2xl font-bold">Downed Probes Status</h2></div>;
-// const ProbeDetails = () => <div className="p-8"><h2 className="text-2xl font-bold">Probe Details</h2></div>;
+// Import Renamed Pages
+import NetworkStatus from './pages/NetworkStatus';
+import CommandCenter from './pages/CommandCenter';
+import Inspector from './pages/Inspector';
+import Trends from './pages/Trends';
 
 function App() {
-  // 1. Create state to track sidebar status
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   return (
     <Router>
       <div className="flex min-h-screen bg-gray-50">
-        
-        {/* 2. Pass the state and the toggle function to Sidebar */}
         <Sidebar isOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
 
-        {/* 3. Adjust margin dynamically: ml-64 (open) vs ml-20 (closed) */}
-        <div 
-          className={`flex-1 transition-all duration-300 ease-in-out ${
-            isSidebarOpen ? 'ml-64' : 'ml-20'
-          }`}
-        >
-          {/* Header
-          <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 sticky top-0 z-10">
-            <h1 className="text-gray-700 font-semibold">Dashboard</h1>
-          </header>
-          */}
-
+        <div className={`flex-1 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'ml-64' : 'ml-20'}`}>
+          
           <main>
             <Routes>
-              <Route path="/" element={<Overview />} />
-              <Route path="/report" element={<Reports />} />
-              <Route path="/probe/:id" element={<ProbeDetails />} />
+              {/* 1. Public Status Page (Default) */}
+              <Route path="/" element={<NetworkStatus />} />
+              
+              {/* 2. Admin Dashboard */}
+              <Route path="/admin" element={<CommandCenter />} />
+              
+              {/* 3. Deep Dive (Inspector) */}
+              <Route path="/inspector/:probeId" element={<Inspector />} />
+              
+              {/* 4. Strategic View */}
+              <Route path="/trends" element={<Trends />} />
+
+              {/* Redirect old routes if necessary */}
+              <Route path="/overview" element={<Navigate to="/admin" replace />} />
             </Routes>
           </main>
         </div>
