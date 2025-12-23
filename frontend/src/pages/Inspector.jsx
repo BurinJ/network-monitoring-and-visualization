@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ChevronDown, ArrowDown, ArrowUp, Globe, Network, Activity, AlertTriangle, CheckCircle } from 'lucide-react';
+import { ChevronDown, ArrowDown, ArrowUp, Globe, Network, Activity, AlertTriangle, CheckCircle, Eye, EyeOff } from 'lucide-react';
 import { API_BASE_URL } from '../config'; 
 
-// ... (TrendGraph component remains the same) ...
 // --- GENERIC TREND GRAPH COMPONENT (Renamed from SpeedHistoryGraph) ---
+// Can handle 2 lines (Ping) or 4 lines (Speed Up/Down)
 const TrendGraph = ({ 
   historyDown, historyUp, 
   avgDown, avgUp, 
@@ -13,17 +13,35 @@ const TrendGraph = ({
   title = "Trend",
   unit = "Mbps"
 }) => {
+  const [showDown, setShowDown] = useState(true);
+  const [showUp, setShowUp] = useState(true);
+
   if (!historyDown || historyDown.length === 0) return <div className={`h-[${height}px] flex items-center justify-center text-xs text-gray-300`}>No History Data</div>;
 
-  const valsDown = historyDown.map(d => d[1]);
-  const valsUp = historyUp ? historyUp.map(d => d[1]) : [];
-  const allVals = [...valsDown, ...valsUp];
+  // Determine active datasets for scaling
+  let activeVals = [];
+  if (showDown) activeVals = [...activeVals, ...historyDown.map(d => d[1])];
+  if (showUp && historyUp) activeVals = [...activeVals, ...historyUp.map(d => d[1])];
   
-  const maxVal = Math.max(...allVals, 10);
+  // If nothing is shown, use a default range
+  const maxVal = activeVals.length > 0 ? Math.max(...activeVals, 10) : 100;
   const minVal = 0;
   const range = maxVal - minVal || 1;
 
+  // Helper to format timestamp for tooltip (d/m/y HH:mm)
+  const formatTime = (ts) => {
+    const date = new Date(ts * 1000);
+    return date.toLocaleString('en-GB', { 
+      day: 'numeric', 
+      month: 'numeric', 
+      year: '2-digit', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
+
   const generatePoints = (data) => {
+    if (!data) return '';
     return data.map((d, i) => {
       const x = (i / (data.length - 1)) * 300;
       const y = height - ((d[1] - minVal) / range) * height;
@@ -31,8 +49,8 @@ const TrendGraph = ({
     }).join(' ');
   };
 
-  const pointsDown = generatePoints(historyDown);
-  const pointsUp = historyUp ? generatePoints(historyUp) : '';
+  const pointsDown = showDown ? generatePoints(historyDown) : '';
+  const pointsUp = showUp && historyUp ? generatePoints(historyUp) : '';
 
   const getAvgY = (val) => val ? height - ((val - minVal) / range) * height : 0;
   const yAvgDown = getAvgY(avgDown);
@@ -42,33 +60,88 @@ const TrendGraph = ({
     <div className="flex-1 min-w-[200px] mt-2 mb-6 last:mb-0">
       <div className="flex justify-between items-center mb-2">
         <span className={`text-[10px] font-bold uppercase tracking-wider text-${color}-600`}>{title}</span>
-        <span className="text-[10px] text-gray-400">Max: {Math.round(maxVal)} {unit}</span>
+        
+        {/* Controls and Scale */}
+        <div className="flex items-center gap-3">
+          {/* Toggles */}
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setShowDown(!showDown)}
+              className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                showDown ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+              }`}
+              title={showDown ? "Hide Download" : "Show Download"}
+            >
+              {showDown ? <Eye size={10} /> : <EyeOff size={10} />} DL
+            </button>
+            
+            {historyUp && (
+              <button 
+                onClick={() => setShowUp(!showUp)}
+                className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                  showUp ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                }`}
+                title={showUp ? "Hide Upload" : "Show Upload"}
+              >
+                {showUp ? <Eye size={10} /> : <EyeOff size={10} />} UL
+              </button>
+            )}
+          </div>
+          <span className="text-[10px] text-gray-400 border-l pl-2 border-gray-200">Max: {Math.round(maxVal)} {unit}</span>
+        </div>
       </div>
 
       <div className="relative border-b border-l border-slate-100 bg-slate-50/30 rounded-sm overflow-hidden" style={{ height: `${height}px` }}>
         <svg viewBox={`0 0 300 ${height}`} className="w-full h-full" preserveAspectRatio="none">
           
-          {/* Line 1 (Download or Ping) */}
-          <polyline 
-            fill="none" 
-            stroke="#10b981" // emerald-500
-            strokeWidth="1.5" 
-            points={pointsDown} 
-            vectorEffect="non-scaling-stroke"
-          />
-          {avgDown > 0 && (
-            <line 
-              x1="0" y1={yAvgDown} x2="300" y2={yAvgDown} 
-              stroke="#10b981" 
-              strokeWidth="1" 
-              strokeDasharray="4,2" 
-              opacity="0.6"
-              vectorEffect="non-scaling-stroke"
-            />
+          {/* --- LINE 1 (Download or Ping) --- */}
+          {showDown && (
+            <>
+              <polyline 
+                fill="none" 
+                stroke="#10b981" // emerald-500
+                strokeWidth="1.5" 
+                points={pointsDown} 
+                vectorEffect="non-scaling-stroke"
+              />
+              {/* Area Fill for Line 1 */}
+              <polygon 
+                 fill="#10b981" 
+                 fillOpacity="0.1" 
+                 points={`0,${height} ${pointsDown} 300,${height}`} 
+              />
+
+              {/* Points for Line 1 */}
+              {historyDown.map((d, i) => {
+                 const x = (i / (historyDown.length - 1)) * 300;
+                 const y = height - ((d[1] - minVal) / range) * height;
+                 return (
+                   <circle 
+                     key={`d-${i}`} 
+                     cx={x} cy={y} r="3" 
+                     fill="#10b981" 
+                     className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
+                   >
+                     <title>{`${formatTime(d[0])} - ${historyUp ? 'Download: ' : ''}${Math.round(d[1])} ${unit}`}</title>
+                   </circle>
+                 );
+              })}
+
+              {avgDown > 0 && (
+                <line 
+                  x1="0" y1={yAvgDown} x2="300" y2={yAvgDown} 
+                  stroke="#10b981" 
+                  strokeWidth="1" 
+                  strokeDasharray="4,2" 
+                  opacity="0.6"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+            </>
           )}
 
-          {/* Line 2 (Upload - Optional) */}
-          {historyUp && (
+          {/* --- LINE 2 (Upload - Optional) --- */}
+          {showUp && historyUp && (
             <>
               <polyline 
                 fill="none" 
@@ -77,6 +150,22 @@ const TrendGraph = ({
                 points={pointsUp} 
                 vectorEffect="non-scaling-stroke"
               />
+              {/* Points for Line 2 */}
+              {historyUp.map((d, i) => {
+                 const x = (i / (historyUp.length - 1)) * 300;
+                 const y = height - ((d[1] - minVal) / range) * height;
+                 return (
+                   <circle 
+                     key={`u-${i}`} 
+                     cx={x} cy={y} r="3" 
+                     fill="#3b82f6" 
+                     className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
+                   >
+                     <title>{`${formatTime(d[0])} - Upload: ${Math.round(d[1])} ${unit}`}</title>
+                   </circle>
+                 );
+              })}
+
               {avgUp > 0 && (
                 <line 
                   x1="0" y1={yAvgUp} x2="300" y2={yAvgUp} 
@@ -93,8 +182,8 @@ const TrendGraph = ({
       </div>
       
       <div className="flex justify-between mt-1 text-[9px] text-slate-400 font-mono">
-        <span>Avg {historyUp ? 'DL' : ''}: {Math.round(avgDown)} {unit}</span>
-        {historyUp && <span>Avg UL: {Math.round(avgUp)} {unit}</span>}
+        <span>{showDown ? `Avg ${historyUp ? 'DL' : ''}: ${Math.round(avgDown)} ${unit}` : ''}</span>
+        {historyUp && <span>{showUp ? `Avg UL: ${Math.round(avgUp)} ${unit}` : ''}</span>}
       </div>
     </div>
   );

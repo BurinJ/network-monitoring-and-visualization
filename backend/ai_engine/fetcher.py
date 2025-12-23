@@ -12,7 +12,6 @@ from prometheus_api_client import PrometheusConnect
 try:
     from .analyzer import detect_anomaly
 except ImportError:
-    # Fallback if analyzer.py is missing or model not trained
     def detect_anomaly(m): return {"is_anomaly": False, "score": 0, "desc": "AI Module Missing"}
 
 # --- IMPORT CONFIGURATION ---
@@ -295,7 +294,7 @@ def fetch_command_center():
         "map_markers": list(map_markers.values())
     }
 
-# --- PAGE 3: INSPECTOR LOGIC (UPDATED FOR MULTIPLE ISSUES) ---
+# --- PAGE 3: INSPECTOR LOGIC (UPDATED WITH AI) ---
 def fetch_inspector_data(probe_id, duration='24h'):
     clean_id = probe_id
     if clean_id.endswith(" (LAN)"): clean_id = clean_id[:-6]
@@ -440,16 +439,19 @@ def fetch_inspector_data(probe_id, duration='24h'):
     wlan_int_down = safe_get_value(f'last_over_time(WLAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}[1h])', default=0)
     wlan_int_up   = safe_get_value(f'last_over_time(WLAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}[1h])', default=0)
 
-    # --- COLLECTING ALL DIAGNOSES ---
-    diagnoses = []
-
-    # 1. AI Anomaly Check
+    # --- AI ANOMALY CHECK (INTEGRATED) ---
     ai_result = detect_anomaly({
         'lan_ping': lan_ping,
         'wlan_ping': wlan_ping,
         'lan_dns': lan_dns,
-        'wlan_dns': wlan_dns
-    })
+        'wlan_dns': wlan_dns,
+        'lan_down': lan_ext_down,
+        'lan_up': lan_ext_up,
+        'wlan_down': wlan_ext_down,
+        'wlan_up': wlan_ext_up
+    }, probe_id=raw_hostname)
+
+    diagnoses = []
 
     if ai_result['is_anomaly']:
         diagnoses.append({
@@ -458,7 +460,6 @@ def fetch_inspector_data(probe_id, duration='24h'):
             "desc": f"{ai_result['desc']} (Score: {ai_result['score']})"
         })
 
-    # 2. Rule-Based Checks
     if is_stale:
          diagnoses.append({"status": "Critical", "title": "Probe Offline", "desc": f"Probe unresponsive for > 1 hour."})
     
@@ -477,7 +478,6 @@ def fetch_inspector_data(probe_id, duration='24h'):
     if has_wlan and wlan_ping > 200:
          diagnoses.append({"status": "Warning", "title": "Wi-Fi Congestion", "desc": "High latency on Wi-Fi interface."})
 
-    # Default if list is empty
     if not diagnoses:
         diagnoses.append({"status": "Healthy", "title": "Normal Operation", "desc": "No significant anomalies detected."})
 
@@ -529,7 +529,6 @@ def fetch_inspector_data(probe_id, duration='24h'):
     }
 
     return {"metrics": data, "ai_diagnoses": diagnoses, "has_wlan": has_wlan} # Changed key to ai_diagnoses (plural)
-
 # --- PAGE 4: TRENDS LOGIC ---
 def fetch_trends_data():
     data = fetch_network_status()
