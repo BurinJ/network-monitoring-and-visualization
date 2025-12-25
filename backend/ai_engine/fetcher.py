@@ -10,7 +10,7 @@ from prometheus_api_client import PrometheusConnect
 
 # --- IMPORT AI ANALYZER ---
 try:
-    from .analyzer import detect_anomaly
+    from .analyzer import detect_anomaly, predict_future_traffic
 except ImportError:
     def detect_anomaly(m): return {"is_anomaly": False, "score": 0, "desc": "AI Module Missing"}
 
@@ -428,6 +428,18 @@ def fetch_inspector_data(probe_id, duration='24h'):
         vals = [h[1] for h in hist]
         return sum(vals) / len(vals)
 
+    def get_smart_cap(*hists):
+        max_avg = 0
+        for h in hists:
+            a = calc_avg(h)
+            if a > max_avg: max_avg = a
+        if max_avg == 0: return 1000
+        # Round to nearest 100
+        return max(100, int(round(max_avg / 100.0) * 100))
+
+    lan_speed_cap = get_smart_cap(lan_hist_ext_down, lan_hist_ext_up, lan_hist_int_down, lan_hist_int_up)
+    wlan_speed_cap = get_smart_cap(wlan_hist_ext_down, wlan_hist_ext_up, wlan_hist_int_down, wlan_hist_int_up)
+
     # Current detailed speeds
     lan_ext_down = safe_get_value(f'last_over_time(LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}[1h])', default=0)
     lan_ext_up   = safe_get_value(f'last_over_time(LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}[1h])', default=0)
@@ -456,8 +468,8 @@ def fetch_inspector_data(probe_id, duration='24h'):
     if ai_result['is_anomaly']:
         diagnoses.append({
             "status": "Warning",
-            "title": "AI Anomaly Detected",
-            "desc": f"{ai_result['desc']} (Score: {ai_result['score']})"
+            "title": "Anomaly Detected By AI",
+            "desc": f"{ai_result['desc']} (Isolation Tree)"
         })
 
     if is_stale:
@@ -502,7 +514,8 @@ def fetch_inspector_data(probe_id, duration='24h'):
                 "external": {"down": round(calc_avg(wlan_hist_ext_down), 2), "up": round(calc_avg(wlan_hist_ext_up), 2)},
                 "internal": {"down": round(calc_avg(wlan_hist_int_down), 2), "up": round(calc_avg(wlan_hist_int_up), 2)},
                 "ping": round(calc_avg(wlan_hist_ping), 2)
-            }
+            },
+            "speed_cap": wlan_speed_cap
         },
         "lan": {
             "status": lan_status,
@@ -524,22 +537,28 @@ def fetch_inspector_data(probe_id, duration='24h'):
                 "external": {"down": round(calc_avg(lan_hist_ext_down), 2), "up": round(calc_avg(lan_hist_ext_up), 2)},
                 "internal": {"down": round(calc_avg(lan_hist_int_down), 2), "up": round(calc_avg(lan_hist_int_up), 2)},
                 "ping": round(calc_avg(lan_hist_ping), 2)
-            }
+            },
+            "speed_cap": lan_speed_cap
         }
     }
 
     return {"metrics": data, "ai_diagnoses": diagnoses, "has_wlan": has_wlan} # Changed key to ai_diagnoses (plural)
+
 # --- PAGE 4: TRENDS LOGIC ---
 def fetch_trends_data():
     data = fetch_network_status()
-    probes = data['wlan']
-    forecast = []
-    now = datetime.datetime.now()
-    for i in range(10):
-        forecast.append({
-            "time": (now + datetime.timedelta(days=i)).strftime("%Y-%m-%d"),
-            "predicted_load": random.randint(40, 90)
-        })
+    probes = data.get('wlan', []) 
+    
+    forecast = predict_future_traffic()
+    
+    if not forecast:
+        now = datetime.datetime.now()
+        for i in range(10):
+            forecast.append({
+                "time": (now + datetime.timedelta(days=i)).strftime("%H:00"),
+                "predicted_load": random.randint(40, 90)
+            })
+            
     return {"heatmap": probes, "forecast": forecast}
 
 # --- MOCK DATA ---

@@ -1,13 +1,23 @@
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import IsolationForest, RandomForestRegressor
 from prometheus_api_client import PrometheusConnect
 import joblib
 import os
 import datetime
 import sys
 
-# Import config to connect to real DB
+# --- PyTorch Imports for LSTM ---
+try:
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    PYTORCH_AVAILABLE = True
+except ImportError:
+    PYTORCH_AVAILABLE = False
+    print("⚠️ PyTorch not found. LSTM training will be skipped.")
+
+# ... (Configuration imports remain same) ...
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from config import PROMETHEUS_URL, PROM_USER, PROM_PASSWORD
@@ -18,7 +28,9 @@ except ImportError:
 
 BASE_DIR = os.path.dirname(__file__)
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
-MODEL_PATH = os.path.join(MODEL_DIR, 'anomaly_model.pkl')
+ANOMALY_MODEL_PATH = os.path.join(MODEL_DIR, 'anomaly_model.pkl')
+FORECAST_MODEL_PATH = os.path.join(MODEL_DIR, 'forecast_model.pkl')
+LSTM_MODEL_PATH = os.path.join(MODEL_DIR, 'lstm_forecast_model.pth')
 
 def ensure_directory():
     if not os.path.exists(MODEL_DIR):
@@ -42,7 +54,6 @@ def fetch_real_data(days=14):
     print(f"📥 Fetching last {days} days of metrics...")
 
     try:
-        # Helper to get DF with 'hostname' column
         def get_df_with_host(query, col_name):
             data = prom.custom_query_range(query=query, start_time=start_time, end_time=end_time, step=step)
             if not data: return pd.DataFrame()
@@ -56,24 +67,15 @@ def fetch_real_data(days=14):
                         'hostname': host,
                         col_name: float(val[1])
                     })
-            
             return pd.DataFrame(records)
 
-        # 1. Fetch Speed Metrics with Hostnames (Critical for Normalization)
-        # We need raw data per probe to calculate baselines
+        # Fetch Data
         df_lan_down = get_df_with_host('avg_over_time(LAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])', 'lan_down')
         df_lan_up = get_df_with_host('avg_over_time(LAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])', 'lan_up')
         df_wlan_down = get_df_with_host('avg_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])', 'wlan_down')
         df_wlan_up = get_df_with_host('avg_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])', 'wlan_up')
         
-        # Latency/DNS (No normalization needed, but fetched for model context)
-        df_wlan_ping = get_df_with_host('avg_over_time(GENERAL_info{wlan_google_response_time!=""}[1h])', 'wlan_ping')
-        # Note: If GENERAL_info stores value in label, custom_query_range is tricky. 
-        # Assuming for training we rely on speed primarily for this normalization logic fix.
-        # Or assuming you have corrected metrics.
-        # For simplicity in this 'Option A' implementation, I'll focus on SPEED normalization.
-        
-        # Merge all speed dataframes on timestamp + hostname
+        # Merge
         dfs = [df_lan_down, df_lan_up, df_wlan_down, df_wlan_up]
         df = dfs[0]
         for d in dfs[1:]:
@@ -82,25 +84,19 @@ def fetch_real_data(days=14):
         
         df = df.fillna(0)
 
-        # --- CALCULATE BASELINES (Per Probe) ---
-        print("📊 Calculating baselines per probe...")
-        # We define "Baseline" as the 95th percentile speed (Max Capacity) seen over 2 weeks
+        # --- CALCULATE BASELINES ---
         baselines = {}
         probes = df['hostname'].unique()
-        
         for probe in probes:
             probe_data = df[df['hostname'] == probe]
             baselines[probe] = {
-                'lan_down_max': probe_data['lan_down'].quantile(0.95) or 1, # Avoid div/0
+                'lan_down_max': probe_data['lan_down'].quantile(0.95) or 1,
                 'lan_up_max': probe_data['lan_up'].quantile(0.95) or 1,
                 'wlan_down_max': probe_data['wlan_down'].quantile(0.95) or 1,
                 'wlan_up_max': probe_data['wlan_up'].quantile(0.95) or 1
             }
 
-        # --- NORMALIZE DATA ---
-        # Convert absolute Mbps to % of Max Capacity (0.0 to 1.0)
-        print("⚖️ Normalizing data for AI training...")
-        
+        # --- NORMALIZE & FEATURE ENGINEERING ---
         def normalize(row):
             host = row['hostname']
             if host in baselines:
@@ -113,85 +109,172 @@ def fetch_real_data(days=14):
 
         df_normalized = df.apply(normalize, axis=1)
         
-        # Add Time Features
+        # Time Features
         df_normalized['hour'] = df_normalized['timestamp'].dt.hour
-        df_normalized['is_weekend'] = df_normalized['timestamp'].dt.dayofweek.isin([5, 6]).astype(int)
+        df_normalized['day_of_week'] = df_normalized['timestamp'].dt.dayofweek
+        df_normalized['is_weekend'] = df_normalized['day_of_week'].isin([5, 6]).astype(int)
         
-        # Select Features for Model
-        feature_cols = ['hour', 'is_weekend', 'lan_down', 'lan_up', 'wlan_down', 'wlan_up']
-        # Add dummy ping columns if needed or just train on speed + time
-        # For simplicity, we train mainly on speed/time here as requested
-        
-        return df_normalized[feature_cols], baselines
+        # Add dummy ping/dns for anomaly model compatibility if missing
+        for c in ['lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']:
+            if c not in df_normalized.columns: df_normalized[c] = 0
 
+        if len(df) > 50:
+            print(f"✅ Fetched {len(df)} real data points.")
+            return df_normalized, baselines
+            
     except Exception as e:
         print(f"⚠️ Error fetching real data: {e}")
         return generate_enhanced_synthetic_data()
 
+    return generate_enhanced_synthetic_data()
+
 def generate_enhanced_synthetic_data(n_samples=5000):
-    """
-    Generates NORMALIZED synthetic data (0.0 - 1.0 scale).
-    """
-    print("🧪 Generating synthetic normalized data...")
+    print("🧪 Generating time-aware synthetic data...")
     
-    hours = np.random.randint(0, 24, n_samples)
-    is_weekend = np.random.choice([0, 1], n_samples, p=[0.7, 0.3])
+    # Generate timestamp sequence to extract day/hour correctly
+    start = datetime.datetime.now() - datetime.timedelta(hours=n_samples)
+    timestamps = [start + datetime.timedelta(hours=i) for i in range(n_samples)]
     
-    # Generate percentages (0.0 to 1.0) instead of Mbps
+    df = pd.DataFrame({'timestamp': timestamps})
+    df['hour'] = df['timestamp'].dt.hour
+    df['day_of_week'] = df['timestamp'].dt.dayofweek
+    df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+    
     lan_downs = []
     
-    for h, w in zip(hours, is_weekend):
-        # Busy times = Lower % of max speed
-        if w == 0 and 9 <= h <= 17:
-            base_pct = 0.4 # 40% capacity
-        else:
-            base_pct = 0.9 # 90% capacity
+    for i, row in df.iterrows():
+        h = row['hour']
+        w = row['is_weekend']
+        # Simulating usage pattern: Peak at 10AM and 2PM, low at night
+        if w == 0: # Weekday
+            usage = 0.3 + 0.6 * np.exp(-((h - 14)**2) / 10) # Bell curve around 14:00
+        else: # Weekend
+            usage = 0.2 + 0.3 * np.exp(-((h - 20)**2) / 20) # Peak in evening
             
-        lan_downs.append(max(0, min(1, np.random.normal(base_pct, 0.1))))
+        noise = np.random.normal(0, 0.05)
+        lan_downs.append(max(0, min(1, usage + noise)))
 
-    df = pd.DataFrame({
-        'hour': hours,
-        'is_weekend': is_weekend,
-        'lan_down': lan_downs,
-        'lan_up': lan_downs, # Simulating symmetric
-        'wlan_down': [x * 0.8 for x in lan_downs],
-        'wlan_up': [x * 0.8 for x in lan_downs],
-        # Add dummy ping if model expects it
-        'lan_ping': np.random.normal(20, 5, n_samples),
-        'wlan_ping': np.random.normal(30, 5, n_samples),
-        'lan_dns': np.random.normal(30, 5, n_samples),
-        'wlan_dns': np.random.normal(35, 5, n_samples),
-    })
+    df['lan_down'] = lan_downs
+    df['lan_up'] = lan_downs
+    df['wlan_down'] = [x * 0.8 for x in lan_downs]
+    df['wlan_up'] = [x * 0.8 for x in lan_downs]
+    df['lan_ping'] = 20
+    df['wlan_ping'] = 30
+    df['lan_dns'] = 20
+    df['wlan_dns'] = 30
     
-    # Mock baselines for synthetic
     baselines = {"default": {"lan_down_max": 1000, "lan_up_max": 1000, "wlan_down_max": 500, "wlan_up_max": 500}}
-    
     return df, baselines
 
-def train_model():
+# --- LSTM MODEL DEFINITION ---
+if PYTORCH_AVAILABLE:
+    class LSTMForecaster(nn.Module):
+        def __init__(self, input_size=1, hidden_size=64, num_layers=2, output_size=1):
+            super(LSTMForecaster, self).__init__()
+            self.hidden_size = hidden_size
+            self.num_layers = num_layers
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+            self.fc = nn.Linear(hidden_size, output_size)
+
+        def forward(self, x):
+            # Initialize hidden and cell states
+            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+            c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+            
+            # Forward propagate LSTM
+            out, _ = self.lstm(x, (h0, c0))
+            
+            # Decode the hidden state of the last time step
+            out = self.fc(out[:, -1, :])
+            return out
+
+    def train_lstm_model(df, seq_length=24, epochs=50, batch_size=32):
+        print("🧠 Training LSTM Forecast Model (PyTorch)...")
+        
+        # Prepare Data: Using 'lan_down' as the time series to forecast
+        data = df['lan_down'].values.astype(np.float32)
+        
+        if len(data) <= seq_length:
+            print("⚠️ Not enough data for LSTM training. Skipping.")
+            return
+
+        # Create Sequences
+        xs, ys = [], []
+        for i in range(len(data) - seq_length):
+            x = data[i:(i + seq_length)]
+            y = data[i + seq_length]
+            xs.append(x)
+            ys.append(y)
+        
+        X = np.array(xs).reshape(-1, seq_length, 1) # [samples, seq_len, features]
+        y = np.array(ys).reshape(-1, 1)
+        
+        # Convert to Tensors
+        X_tensor = torch.from_numpy(X)
+        y_tensor = torch.from_numpy(y)
+        
+        dataset = TensorDataset(X_tensor, y_tensor)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        # Initialize Model
+        model = LSTMForecaster()
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        
+        # Training Loop
+        model.train()
+        for epoch in range(epochs):
+            for inputs, targets in loader:
+                optimizer.zero_grad()
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
+        
+        # Save Model
+        torch.save(model.state_dict(), LSTM_MODEL_PATH)
+        print(f"✅ LSTM Model saved to: {LSTM_MODEL_PATH}")
+
+def train_models():
     ensure_directory()
     df, baselines = fetch_real_data()
     
-    print("🧠 Training AI Model on Normalized Data...")
-    
-    # Ensure all required columns exist
-    required_cols = ['hour', 'is_weekend', 'lan_down', 'lan_up', 'wlan_down', 'wlan_up', 
-                     'lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']
-    for c in required_cols:
-        if c not in df.columns: df[c] = 0.5 if 'down' in c or 'up' in c else 20 # Defaults
+    # --- 1. TRAIN ANOMALY DETECTION (Isolation Forest) ---
+    print("🧠 Training Anomaly Detection Model...")
+    anomaly_cols = ['hour', 'is_weekend', 'lan_down', 'lan_up', 'wlan_down', 'wlan_up', 'lan_ping', 'wlan_ping']
+    # Ensure columns exist
+    for c in anomaly_cols: 
+        if c not in df.columns: df[c] = 0
             
-    model = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
-    model.fit(df[required_cols])
+    anomaly_model = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+    anomaly_model.fit(df[anomaly_cols])
     
-    # Save Model AND Probe Baselines
-    model_package = {
-        'model': model,
-        'baselines': baselines, # <--- Crucial: Analyzer needs this to normalize input
-        'features': required_cols
+    anomaly_package = {
+        'model': anomaly_model,
+        'baselines': baselines,
+        'features': anomaly_cols
     }
+    joblib.dump(anomaly_package, ANOMALY_MODEL_PATH)
+    print(f"✅ Anomaly Model saved to: {ANOMALY_MODEL_PATH}")
+
+    # --- 2. TRAIN TREND PREDICTION (Random Forest Regressor) ---
+    print("🔮 Training Forecast Model (Random Forest)...")
+    # Features: Hour, Day of Week, Is Weekend
+    # Target: LAN Download % (General network load indicator)
+    X = df[['hour', 'day_of_week', 'is_weekend']]
+    y = df['lan_down'] # predicting normalized load
     
-    joblib.dump(model_package, MODEL_PATH)
-    print(f"✅ Model & Baselines saved to: {MODEL_PATH}")
+    forecast_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    forecast_model.fit(X, y)
+    
+    joblib.dump(forecast_model, FORECAST_MODEL_PATH)
+    print(f"✅ Random Forest Forecast Model saved to: {FORECAST_MODEL_PATH}")
+
+    # --- 3. TRAIN LSTM PREDICTION (PyTorch) ---
+    if PYTORCH_AVAILABLE:
+        train_lstm_model(df)
+    else:
+        print("⏩ Skipping LSTM training (PyTorch missing)")
 
 if __name__ == "__main__":
-    train_model()
+    train_models()

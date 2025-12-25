@@ -57,7 +57,7 @@ const TrendGraph = ({
   const yAvgUp = getAvgY(avgUp);
 
   return (
-    <div className="flex-1 min-w-[200px] mt-2 mb-6 last:mb-0">
+    <div className="flex-1 min-w-[200px] mt-2 mb-6 last:mb-0 pl-8 relative">
       <div className="flex justify-between items-center mb-2">
         <span className={`text-[10px] font-bold uppercase tracking-wider text-${color}-600`}>{title}</span>
         
@@ -91,97 +91,106 @@ const TrendGraph = ({
         </div>
       </div>
 
-      <div className="relative border-b border-l border-slate-100 bg-slate-50/30 rounded-sm overflow-hidden" style={{ height: `${height}px` }}>
-        <svg viewBox={`0 0 300 ${height}`} className="w-full h-full" preserveAspectRatio="none">
-          
-          {/* --- LINE 1 (Download or Ping) --- */}
-          {showDown && (
-            <>
-              <polyline 
-                fill="none" 
-                stroke="#10b981" // emerald-500
-                strokeWidth="1.5" 
-                points={pointsDown} 
-                vectorEffect="non-scaling-stroke"
-              />
-              {/* Area Fill for Line 1 */}
-              <polygon 
-                 fill="#10b981" 
-                 fillOpacity="0.1" 
-                 points={`0,${height} ${pointsDown} 300,${height}`} 
-              />
+      <div className="relative" style={{ height: `${height}px` }}>
+        {/* Y-Axis Indicators - Moved outside overflow-hidden container */}
+        <div className="absolute left-[-32px] top-0 bottom-0 w-8 flex flex-col justify-between text-[9px] text-gray-400 font-mono pointer-events-none pr-1 text-right z-10">
+          <span>{Math.round(maxVal)}</span>
+          <span>{Math.round(maxVal / 2)}</span>
+          <span>0</span>
+        </div>
 
-              {/* Points for Line 1 */}
-              {historyDown.map((d, i) => {
-                 const x = (i / (historyDown.length - 1)) * 300;
-                 const y = height - ((d[1] - minVal) / range) * height;
-                 return (
-                   <circle 
-                     key={`d-${i}`} 
-                     cx={x} cy={y} r="3" 
-                     fill="#10b981" 
-                     className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
-                   >
-                     <title>{`${formatTime(d[0])} - ${historyUp ? 'Download: ' : ''}${Math.round(d[1])} ${unit}`}</title>
-                   </circle>
-                 );
-              })}
-
-              {avgDown > 0 && (
-                <line 
-                  x1="0" y1={yAvgDown} x2="300" y2={yAvgDown} 
-                  stroke="#10b981" 
-                  strokeWidth="1" 
-                  strokeDasharray="4,2" 
-                  opacity="0.6"
+        <div className="relative border-b border-l border-slate-100 bg-slate-50/30 rounded-sm overflow-hidden h-full w-full">
+          <svg viewBox={`0 0 300 ${height}`} className="w-full h-full" preserveAspectRatio="none">
+            
+            {/* --- LINE 1 (Download or Ping) --- */}
+            {showDown && (
+              <>
+                <polyline 
+                  fill="none" 
+                  stroke="#10b981" // emerald-500
+                  strokeWidth="1.5" 
+                  points={pointsDown} 
                   vectorEffect="non-scaling-stroke"
                 />
-              )}
-            </>
-          )}
+                {/* Area Fill for Line 1 */}
+                <polygon 
+                  fill="#10b981" 
+                  fillOpacity="0.1" 
+                  points={`0,${height} ${pointsDown} 300,${height}`} 
+                />
 
-          {/* --- LINE 2 (Upload - Optional) --- */}
-          {showUp && historyUp && (
-            <>
-              <polyline 
-                fill="none" 
-                stroke="#3b82f6" // blue-500
-                strokeWidth="1.5" 
-                points={pointsUp} 
-                vectorEffect="non-scaling-stroke"
-              />
-              {/* Points for Line 2 */}
-              {historyUp.map((d, i) => {
-                 const x = (i / (historyUp.length - 1)) * 300;
-                 const y = height - ((d[1] - minVal) / range) * height;
-                 return (
-                   <circle 
-                     key={`u-${i}`} 
-                     cx={x} cy={y} r="3" 
-                     fill="#3b82f6" 
-                     className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
-                   >
-                     <title>{`${formatTime(d[0])} - Upload: ${Math.round(d[1])} ${unit}`}</title>
-                   </circle>
-                 );
-              })}
+                {/* Points for Line 1 */}
+                {historyDown.map((d, i) => {
+                  const x = (i / (historyDown.length - 1)) * 300;
+                  const y = height - ((d[1] - minVal) / range) * height;
+                  return (
+                    <circle 
+                      key={`d-${i}`} 
+                      cx={x} cy={y} r="3" 
+                      fill="#10b981" 
+                      className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
+                    >
+                      <title>{`${formatTime(d[0])} - ${historyUp ? 'Download: ' : ''}${Math.round(d[1])} ${unit}`}</title>
+                    </circle>
+                  );
+                })}
 
-              {avgUp > 0 && (
-                <line 
-                  x1="0" y1={yAvgUp} x2="300" y2={yAvgUp} 
-                  stroke="#3b82f6" 
-                  strokeWidth="1" 
-                  strokeDasharray="4,2" 
-                  opacity="0.6"
+                {avgDown > 0 && (
+                  <line 
+                    x1="0" y1={yAvgDown} x2="300" y2={yAvgDown} 
+                    stroke="#10b981" 
+                    strokeWidth="1" 
+                    strokeDasharray="4,2" 
+                    opacity="0.6"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+              </>
+            )}
+
+            {/* --- LINE 2 (Upload - Optional) --- */}
+            {showUp && historyUp && (
+              <>
+                <polyline 
+                  fill="none" 
+                  stroke="#3b82f6" // blue-500
+                  strokeWidth="1.5" 
+                  points={pointsUp} 
                   vectorEffect="non-scaling-stroke"
                 />
-              )}
-            </>
-          )}
-        </svg>
+                {/* Points for Line 2 */}
+                {historyUp.map((d, i) => {
+                  const x = (i / (historyUp.length - 1)) * 300;
+                  const y = height - ((d[1] - minVal) / range) * height;
+                  return (
+                    <circle 
+                      key={`u-${i}`} 
+                      cx={x} cy={y} r="3" 
+                      fill="#3b82f6" 
+                      className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
+                    >
+                      <title>{`${formatTime(d[0])} - Upload: ${Math.round(d[1])} ${unit}`}</title>
+                    </circle>
+                  );
+                })}
+
+                {avgUp > 0 && (
+                  <line 
+                    x1="0" y1={yAvgUp} x2="300" y2={yAvgUp} 
+                    stroke="#3b82f6" 
+                    strokeWidth="1" 
+                    strokeDasharray="4,2" 
+                    opacity="0.6"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+              </>
+            )}
+          </svg>
+        </div>
       </div>
       
-      <div className="flex justify-between mt-1 text-[9px] text-slate-400 font-mono">
+      <div className="flex justify-between mt-1 text-[9px] text-slate-400 font-mono pl-1">
         <span>{showDown ? `Avg ${historyUp ? 'DL' : ''}: ${Math.round(avgDown)} ${unit}` : ''}</span>
         {historyUp && <span>{showUp ? `Avg UL: ${Math.round(avgUp)} ${unit}` : ''}</span>}
       </div>
@@ -196,7 +205,7 @@ const Inspector = () => {
   const [probes, setProbes] = useState([]);
   const [timeRange, setTimeRange] = useState('24h');
 
-  // 1. Fetch Probe List
+  // 1. Fetch Probe List for Dropdown
   useEffect(() => {
     const baseUrl = typeof API_BASE_URL !== 'undefined' ? API_BASE_URL : 'http://localhost:5000/api';
     fetch(`${baseUrl}/probes`)
@@ -205,7 +214,7 @@ const Inspector = () => {
       .catch(console.error);
   }, []);
 
-  // 2. Fetch Data
+  // 2. Fetch Data for Selected Probe and Time Range
   useEffect(() => {
     const baseUrl = typeof API_BASE_URL !== 'undefined' ? API_BASE_URL : 'http://localhost:5000/api';
     setData(null);
@@ -272,16 +281,16 @@ const Inspector = () => {
     );
   };
 
-  const SpeedSection = ({ title, icon: TitleIcon, external, internal, history, average, color }) => (
+  const SpeedSection = ({ title, icon: TitleIcon, external, internal, history, average, color, speedCap }) => (
     <div className="bg-white border border-teal-100 rounded-lg p-4 shadow-sm">
       <h4 className="font-bold text-teal-600 text-xs uppercase mb-4 flex items-center gap-2 border-b border-teal-50 pb-2">
-        <TitleIcon size={14} /> {title} Speed
+        <TitleIcon size={14} /> {title} Speed <span className="text-gray-400 text-[10px] ml-auto">Cap: {speedCap} Mbps</span>
       </h4>
       
       <div className="mb-6">
         <span className="text-[10px] uppercase font-bold text-slate-400 mb-2 block tracking-wider">External Internet</span>
-        <SpeedBar label="Download" value={external.down} barColor="bg-emerald-500" iconColor="emerald" Icon={ArrowDown} />
-        <SpeedBar label="Upload" value={external.up} barColor="bg-blue-500" iconColor="blue" Icon={ArrowUp} />
+        <SpeedBar label="Download" value={external.down} max={speedCap} barColor="bg-emerald-500" iconColor="emerald" Icon={ArrowDown} />
+        <SpeedBar label="Upload" value={external.up} max={speedCap} barColor="bg-blue-500" iconColor="blue" Icon={ArrowUp} />
         
         <TrendGraph 
           title={`External Trend (${timeRange})`}
@@ -296,8 +305,8 @@ const Inspector = () => {
 
       <div className="pt-4 border-t border-dashed border-teal-50">
         <span className="text-[10px] uppercase font-bold text-slate-400 mb-2 block tracking-wider">Internal LAN</span>
-        <SpeedBar label="Download" value={internal.down} barColor="bg-emerald-400" iconColor="emerald" Icon={ArrowDown} />
-        <SpeedBar label="Upload" value={internal.up} barColor="bg-blue-400" iconColor="blue" Icon={ArrowUp} />
+        <SpeedBar label="Download" value={internal.down} max={speedCap} barColor="bg-emerald-400" iconColor="emerald" Icon={ArrowDown} />
+        <SpeedBar label="Upload" value={internal.up} max={speedCap} barColor="bg-blue-400" iconColor="blue" Icon={ArrowUp} />
 
         <TrendGraph 
           title={`Internal Trend (${timeRange})`}
@@ -419,6 +428,7 @@ const Inspector = () => {
             history={metrics.lan.history}
             average={metrics.lan.average}
             color="emerald"
+            speedCap={metrics.lan.speed_cap}
           />
         </div>
 
@@ -450,6 +460,7 @@ const Inspector = () => {
               history={metrics.wlan.history}
               average={metrics.wlan.average}
               color="purple"
+              speedCap={metrics.wlan.speed_cap}
             />
           </div>
         )}
