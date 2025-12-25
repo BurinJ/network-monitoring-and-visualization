@@ -547,16 +547,29 @@ def fetch_inspector_data(probe_id, duration='24h'):
 # --- PAGE 4: TRENDS LOGIC ---
 def fetch_trends_data():
     data = fetch_network_status()
-    probes = data.get('wlan', []) 
+    probes = data.get('wlan', [])
     
-    forecast = predict_future_traffic()
+    # 1. Fetch Aggregate History for LSTM context (Last 24h)
+    # We use LAN download as the main indicator for total network load
+    raw_history = get_metric_history('avg(LAN_EXTERNAL_SPEEDTEST{type="Download"})', hours=24, step='1h')
     
+    # 2. Normalize History (0-1) for LSTM
+    # We need a global baseline. Let's assume 1000Mbps is the max backbone speed for aggregation.
+    norm_history = []
+    if raw_history:
+        norm_history = [val[1] / 1000.0 for val in raw_history]
+        
+    # 3. Get Forecasts
+    forecast = predict_future_traffic(norm_history)
+    
+    # 4. Fallback if empty
     if not forecast:
         now = datetime.datetime.now()
-        for i in range(10):
+        for i in range(24):
             forecast.append({
-                "time": (now + datetime.timedelta(days=i)).strftime("%H:00"),
-                "predicted_load": random.randint(40, 90)
+                "time": (now + datetime.timedelta(hours=i)).strftime("%H:00"),
+                "rf_load": random.randint(40, 90),
+                "lstm_load": random.randint(30, 80)
             })
             
     return {"heatmap": probes, "forecast": forecast}
