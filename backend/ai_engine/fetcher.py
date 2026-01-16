@@ -8,6 +8,16 @@ import datetime
 import random
 from prometheus_api_client import PrometheusConnect
 
+# --- IMPORT HISTORY MANAGER ---
+try:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    import history
+except ImportError:
+    # Fallback if history.py not found during dev
+    class MockHistory:
+        def log_alert(self, *args): pass
+    history = MockHistory()
+
 # --- IMPORT AI ANALYZER ---
 try:
     from .analyzer import detect_anomaly, predict_future_traffic
@@ -100,6 +110,23 @@ def get_metric_history(query, hours=24, step='1h'):
         print(f"History Query Error: {e}")
     return []
 
+# --- ALERT CACHE (Prevent Spamming DB) ---
+# Format: { "probe_id_error_type": timestamp_last_logged }
+ALERT_COOLDOWN = {} 
+
+def check_and_log(probe_id, level, category, message, details):
+    """
+    Logs an alert only if it hasn't been logged in the last 15 minutes.
+    """
+    key = f"{probe_id}_{category}"
+    now = time.time()
+    last_time = ALERT_COOLDOWN.get(key, 0)
+    
+    # 15 minutes cooldown = 900 seconds
+    if (now - last_time) > 900:
+        history.log_alert(probe_id, level, category, message, details)
+        ALERT_COOLDOWN[key] = now
+        
 # --- PAGE 1: NETWORK STATUS LOGIC ---
 def fetch_network_status():
     if not CONNECTED: return _mock_pulse_data()
@@ -111,10 +138,8 @@ def fetch_network_status():
             for item in ts_results:
                 host = item['metric'].get('hostname')
                 if host:
-                    try:
-                        timestamp_map[host] = float(item['value'][1])
-                    except (ValueError, IndexError):
-                        pass
+                    try: timestamp_map[host] = float(item['value'][1])
+                    except: pass
     except Exception: pass
 
     query = 'GENERAL_info'
@@ -134,22 +159,14 @@ def fetch_network_status():
             probe_ts = timestamp_map.get(raw_hostname, 0)
             is_stale = False
             stale_label = "Offline"
+            if probe_ts > 0 and (current_time - probe_ts) > 3600:
+                is_stale = True
+                check_and_log(display_name, "Critical", "Stale", "Probe Offline", f"Last seen > 1h ago")
 
-            if probe_ts > 0:
-                diff = current_time - probe_ts
-                if diff > 3600:
-                    is_stale = True
-                    days = int(diff // 86400)
-                    hours = int((diff % 86400) // 3600)
-                    minutes = int((diff % 3600) // 60)
-                    parts = []
-                    if days > 0: parts.append(f"{days}d")
-                    if hours > 0: parts.append(f"{hours}h")
-                    parts.append(f"{minutes}m")
-                    stale_label = f"Offline (~{' '.join(parts)})"
-
-            # Error labels check
             error_label = metric_labels.get('error', 'None')
+            if error_label != "None":
+                 check_and_log(display_name, "Critical", "Self-Report", "Hardware/Software Error", error_label)
+
             lan_curl_err = metric_labels.get('lan_google_curl', 'True') == 'False'
             wlan_curl_err = metric_labels.get('wlan_google_curl', 'True') == 'False'
 
@@ -157,8 +174,7 @@ def fetch_network_status():
             try:
                 lan_latency = float(metric_labels.get('lan_google_response_time', '0'))
                 lan_dns = float(metric_labels.get('lan_dns_response_time', '0'))
-            except ValueError:
-                lan_latency, lan_dns = 0.0, 0.0
+            except ValueError: lan_latency, lan_dns = 0.0, 0.0
 
             lan_status = "Active"
             lan_color = "green"
@@ -171,15 +187,19 @@ def fetch_network_status():
             elif lan_latency == 0 or lan_latency > 2000:
                 lan_status = "Down"
                 lan_color = "red"
-            elif lan_dns > 500 or (lan_dns == 0 and lan_latency > 0): 
+                check_and_log(display_name, "Critical", "LAN Connectivity", "LAN Unreachable", "Ping Timeout")
+            elif lan_dns > 500:
                 lan_status = "DNS Failure"
                 lan_color = "red"
+                check_and_log(display_name, "Critical", "LAN DNS", "DNS Resolution Failed", f"Time: {lan_dns}ms")
             elif lan_dns > 100:
                 lan_status = "Slow DNS"
                 lan_color = "orange"
+                check_and_log(display_name, "Warning", "LAN DNS", "Slow DNS Response", f"Time: {lan_dns}ms")
             elif lan_latency > 100:
                 lan_status = "Laggy"
                 lan_color = "orange"
+                check_and_log(display_name, "Warning", "LAN Latency", "High Latency", f"Ping: {lan_latency}ms")
 
             lan_probes.append({
                 "name": display_name,
@@ -197,8 +217,7 @@ def fetch_network_status():
             try:
                 wlan_latency = float(metric_labels.get('wlan_google_response_time', '0'))
                 wlan_dns = float(metric_labels.get('wlan_dns_response_time', '0'))
-            except ValueError:
-                wlan_latency, wlan_dns = 0.0, 0.0
+            except ValueError: wlan_latency, wlan_dns = 0.0, 0.0
 
             wlan_status = "Active"
             wlan_color = "green"
@@ -214,15 +233,19 @@ def fetch_network_status():
             elif wlan_latency == 0 or wlan_latency > 2000:
                 wlan_status = "Down"
                 wlan_color = "red"
-            elif wlan_dns > 500 or (wlan_dns == 0 and wlan_latency > 0):
+                check_and_log(display_name, "Critical", "WLAN Connectivity", "Wi-Fi Unreachable", "Ping Timeout")
+            elif wlan_dns > 500:
                 wlan_status = "DNS Failure"
                 wlan_color = "red"
+                check_and_log(display_name, "Critical", "WLAN DNS", "DNS Resolution Failed", f"Time: {wlan_dns}ms")
             elif wlan_dns > 100:
                 wlan_status = "Slow DNS"
                 wlan_color = "orange"
+                check_and_log(display_name, "Warning", "WLAN DNS", "Slow DNS Response", f"Time: {wlan_dns}ms")
             elif wlan_latency > 200:
                 wlan_status = "Laggy"
                 wlan_color = "orange"
+                check_and_log(display_name, "Warning", "WLAN Latency", "High Latency", f"Ping: {wlan_latency}ms")
 
             wlan_probes.append({
                 "name": display_name,
@@ -235,6 +258,16 @@ def fetch_network_status():
                 "lat": float(metric_labels.get('latitude', '0')),
                 "lng": float(metric_labels.get('longitude', '0'))
             })
+
+            # --- AI CHECK (Run periodically here too?) ---
+            # To avoid performance hit, maybe only run simple checks here.
+            # Or run AI detection:
+            try:
+                # We need speed for AI, but this loop only has labels.
+                # Just skipping heavy AI here for loop performance. 
+                # Ideally, a separate thread handles detailed analysis.
+                pass 
+            except: pass
 
         return {"lan": lan_probes, "wlan": wlan_probes}
     except Exception as e:

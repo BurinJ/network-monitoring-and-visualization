@@ -4,32 +4,32 @@ import {
   TrendingUp, 
   ChevronLeft, 
   ChevronRight, 
-  AlertTriangle, 
   Search,
-  LayoutDashboard 
+  LayoutDashboard,
+  LogOut,
+  History,
+  Settings
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { API_BASE_URL } from '../config'; 
 
-const Sidebar = ({ isOpen, toggleSidebar }) => {
+const Sidebar = ({ isOpen, toggleSidebar, user, onLogout }) => {
   const location = useLocation();
   const [defaultProbe, setDefaultProbe] = useState('Library');
 
-  // Fetch probes only to determine where the main "Probe Inspection" link should go
   useEffect(() => {
     const baseUrl = typeof API_BASE_URL !== 'undefined' ? API_BASE_URL : 'http://localhost:5000/api';
     fetch(`${baseUrl}/probes`)
       .then(res => res.json())
       .then(data => {
         if (data && data.length > 0) {
-          setDefaultProbe(data[0]); // Default to the first probe in the list
+          setDefaultProbe(data[0]); 
         }
       })
       .catch(err => console.error("Failed to fetch probes:", err));
   }, []);
 
   const NavItem = ({ to, icon, label }) => {
-    // Highlight if the path starts with the link (e.g., /inspector highlights for /inspector/Library)
     const isActive = location.pathname === to || (to !== '/' && location.pathname.startsWith(to));
     return (
       <Link 
@@ -59,7 +59,6 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         ${isOpen ? 'w-64' : 'w-20'}
       `}
     >
-      {/* Header */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-teal-800 relative">
         <div className={`font-bold text-[20px] tracking-wider text-emerald-400 transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0 hidden'}`}>
           KU Net
@@ -74,28 +73,34 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         </button>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-3 py-6 overflow-y-auto scrollbar-hide">
         <NavItem to="/" icon={<Activity size={20} />} label="Connectivity Status" />
-        
-        {/* Renamed to "Network Operations" */}
-        <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Monitoring Dashboard" />
-        
-        <NavItem to={`/inspector/${defaultProbe}`} icon={<Search size={20} />} label="Network Inspection" />
-        
+        <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Network Operations" />
+        <NavItem to={`/inspector/${defaultProbe}`} icon={<Search size={20} />} label="Probe Inspection" />
         <NavItem to="/trends" icon={<TrendingUp size={20} />} label="Trends" />
+        <NavItem to="/history" icon={<History size={20} />} label="Alert History" />
+        <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" />
       </nav>
 
-      {/* Profile */}
-      <div className="p-4 border-t border-teal-800 overflow-hidden bg-teal-950/30 shrink-0">
+      <div className="p-4 border-t border-teal-800 bg-teal-950/30 shrink-0">
         <div className={`flex items-center gap-3 transition-all duration-300 ${!isOpen && 'justify-center'}`}>
           <div className="w-8 h-8 min-w-[32px] rounded-full bg-emerald-500 flex items-center justify-center font-bold text-white shadow-sm">
-            A
+            {user?.username?.charAt(0).toUpperCase() || 'U'}
           </div>
-          <div className={`text-sm transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0 hidden'}`}>
-            <div className="font-semibold whitespace-nowrap text-teal-50">Admin</div>
-            <div className="text-xs text-teal-400 whitespace-nowrap">IT Department</div>
+          <div className={`text-sm transition-opacity duration-200 overflow-hidden ${isOpen ? 'opacity-100 w-auto' : 'opacity-0 w-0 hidden'}`}>
+            <div className="font-semibold whitespace-nowrap text-teal-50">{user?.username || 'Guest'}</div>
+            <div className="text-xs text-teal-400 whitespace-nowrap">{user?.department || 'Visitor'}</div>
           </div>
+          
+          {isOpen && (
+             <button 
+               onClick={onLogout}
+               className="ml-auto text-teal-400 hover:text-red-400 transition-colors"
+               title="Sign Out"
+             >
+               <LogOut size={18} />
+             </button>
+          )}
         </div>
       </div>
     </div>

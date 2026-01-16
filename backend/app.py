@@ -1,9 +1,28 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from ai_engine.fetcher import fetch_network_status, fetch_command_center, fetch_inspector_data, fetch_trends_data
+from ai_engine.trainer import train_models
+from ai_engine import analyzer
+import history, time, threading
 
 app = Flask(__name__)
 CORS(app) 
+
+# --- BACKGROUND MONITOR ---
+def background_monitor():
+    """Runs every 60 seconds to log alerts to DB."""
+    print("<T> Background Monitor Started")
+    while True:
+        try:
+            # This function now has internal logging logic
+            fetch_network_status()
+        except Exception as e:
+            print(f"Background Monitor Error: {e}")
+        time.sleep(60)
+
+# Start thread
+monitor_thread = threading.Thread(target=background_monitor, daemon=True)
+monitor_thread.start()
 
 @app.route('/')
 def home():
@@ -43,6 +62,27 @@ def get_probe_list():
         [p['name'] for p in data.get('wlan', [])]
     )))
     return jsonify(names)
+
+@app.route('/api/alerts/history', methods=['GET'])
+def get_alert_history():
+    limit = request.args.get('limit', 100)
+    alerts = history.get_recent_alerts(int(limit))
+    return jsonify(alerts)
+
+@app.route('/api/admin/train', methods=['POST'])
+def trigger_training():
+    try:
+        print("🔄 Manual training triggered via API...")
+        # 1. Run the training process
+        train_models()
+        
+        # 2. Reload the models in the analyzer so changes take effect immediately
+        analyzer.load_models()
+        
+        return jsonify({"status": "success", "message": "Models retrained and reloaded successfully."})
+    except Exception as e:
+        print(f"❌ Training Error: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 if __name__ == '__main__':
     print("🚀 Starting AI Backend Server on http://localhost:5000")
