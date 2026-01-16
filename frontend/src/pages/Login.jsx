@@ -12,7 +12,7 @@ const Login = ({ onLogin }) => {
     e.preventDefault();
     // Simple Mock Authentication Logic
     // In a real app, this would call your backend API
-    if (username === 'admin' && password === 'admin') {
+    if (username === 'admin' && password === 'admin12345') {
       onLogin({ username: 'admin', role: 'admin', department: 'IT Dept' });
       navigate('/admin');
     } else if (username === 'staff' && password === 'staff') {
@@ -74,10 +74,6 @@ const Login = ({ onLogin }) => {
           </button>
         </form>
 
-        <div className="mt-6 text-center text-xs text-slate-400">
-          <p>Admin Login: admin / admin</p>
-          <p>Staff Login: staff / staff</p>
-        </div>
       </div>
     </div>
   );

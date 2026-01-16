@@ -24,14 +24,54 @@ try:
 except ImportError:
     def detect_anomaly(m): return {"is_anomaly": False, "score": 0, "desc": "AI Module Missing"}
 
+# --- IMPORT CONFIGURATION & MAPPINGS ---
+MAPPING_FILE = os.path.join(os.path.dirname(__file__), '../probe_mappings.json')
+HOSTNAME_MAPPING = {}
+
+def load_mappings():
+    global HOSTNAME_MAPPING
+    # 1. Load defaults from config.py
+    try:
+        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        from config import HOSTNAME_MAPPING as DEFAULTS
+        HOSTNAME_MAPPING = DEFAULTS.copy()
+    except ImportError:
+        HOSTNAME_MAPPING = {}
+    
+    # 2. Override with saved JSON mappings
+    if os.path.exists(MAPPING_FILE):
+        try:
+            with open(MAPPING_FILE, 'r') as f:
+                saved = json.load(f)
+                HOSTNAME_MAPPING.update(saved)
+            print(f"✅ Loaded {len(HOSTNAME_MAPPING)} probe mappings.")
+        except Exception as e:
+            print(f"⚠️ Error loading mapping file: {e}")
+
+def save_mapping(raw_host, friendly_name):
+    """Updates the mapping in memory and saves to JSON."""
+    global HOSTNAME_MAPPING
+    HOSTNAME_MAPPING[raw_host] = friendly_name
+    try:
+        with open(MAPPING_FILE, 'w') as f:
+            json.dump(HOSTNAME_MAPPING, f, indent=2)
+        print(f"💾 Saved mapping: {raw_host} -> {friendly_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving mapping: {e}")
+        return False
+
+# Initialize mappings immediately
+load_mappings()
+
 # --- IMPORT CONFIGURATION ---
+# Load other config vars
 try:
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from config import PROMETHEUS_URL, HOSTNAME_MAPPING, PROM_PASSWORD, PROM_USER
+    from config import PROMETHEUS_URL, PROM_PASSWORD, PROM_USER
 except ImportError:
-    print("⚠️ Config file not found. Using defaults.")
     PROMETHEUS_URL = "http://localhost:9090"
-    HOSTNAME_MAPPING = {}
+    PROM_USER = None
+    PROM_PASSWORD = None
 
 # --- CONNECTION SETUP ---
 try:
@@ -110,6 +150,23 @@ def get_metric_history(query, hours=24, step='1h'):
         print(f"History Query Error: {e}")
     return []
 
+# --- HELPER: Bulk Fetch Latest Values for Map ---
+def get_metric_map(query):
+    """Fetches a metric for all hosts and returns a dict {hostname: value}"""
+    mapping = {}
+    if not CONNECTED: return mapping
+    try:
+        results = prom.custom_query(query=query)
+        for item in results:
+            host = item['metric'].get('hostname')
+            if host:
+                try:
+                    mapping[host] = float(item['value'][1])
+                except: pass
+    except Exception as e:
+        print(f"Bulk Fetch Error ({query}): {e}")
+    return mapping
+
 # --- ALERT CACHE (Prevent Spamming DB) ---
 # Format: { "probe_id_error_type": timestamp_last_logged }
 ALERT_COOLDOWN = {} 
@@ -142,6 +199,17 @@ def fetch_network_status():
                     except: pass
     except Exception: pass
 
+    # --- NEW: Bulk Fetch Speeds ---
+    # Using 'last_over_time' to get the most recent value within the last hour
+    lan_down_map = get_metric_map('last_over_time(LAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])')
+    lan_up_map = get_metric_map('last_over_time(LAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])')
+    wlan_down_map = get_metric_map('last_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])')
+    wlan_up_map = get_metric_map('last_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])')
+
+    # --- NEW: Bulk Fetch Pings (Latency) ---
+    lan_ping_map = get_metric_map('last_over_time(LAN_PING{metrics="avgRTT", type="EXTERNAL"}[1h])')
+    wlan_ping_map = get_metric_map('last_over_time(WLAN_PING{metrics="avgRTT", type="EXTERNAL"}[1h])')
+
     query = 'GENERAL_info'
     try:
         results = prom.custom_query(query=query)
@@ -159,22 +227,35 @@ def fetch_network_status():
             probe_ts = timestamp_map.get(raw_hostname, 0)
             is_stale = False
             stale_label = "Offline"
-            if probe_ts > 0 and (current_time - probe_ts) > 3600:
-                is_stale = True
-                check_and_log(display_name, "Critical", "Stale", "Probe Offline", f"Last seen > 1h ago")
+
+            if probe_ts > 0:
+                diff = current_time - probe_ts
+                if diff > 3600:
+                    is_stale = True
+                    days = int(diff // 86400)
+                    hours = int((diff % 86400) // 3600)
+                    minutes = int((diff % 3600) // 60)
+                    parts = []
+                    if days > 0: parts.append(f"{days}d")
+                    if hours > 0: parts.append(f"{hours}h")
+                    parts.append(f"{minutes}m")
+                    stale_label = f"Offline (~{' '.join(parts)})"
 
             error_label = metric_labels.get('error', 'None')
-            if error_label != "None":
-                 check_and_log(display_name, "Critical", "Self-Report", "Hardware/Software Error", error_label)
-
             lan_curl_err = metric_labels.get('lan_google_curl', 'True') == 'False'
             wlan_curl_err = metric_labels.get('wlan_google_curl', 'True') == 'False'
 
             # LAN
             try:
-                lan_latency = float(metric_labels.get('lan_google_response_time', '0'))
                 lan_dns = float(metric_labels.get('lan_dns_response_time', '0'))
-            except ValueError: lan_latency, lan_dns = 0.0, 0.0
+            except ValueError:
+                lan_dns = 0.0
+            
+            # Lookup Speeds (Default to 0 if not found)
+            lan_down = lan_down_map.get(raw_hostname, 0)
+            lan_up = lan_up_map.get(raw_hostname, 0)
+            # Lookup Latency
+            lan_latency = lan_ping_map.get(raw_hostname, 0)
 
             lan_status = "Active"
             lan_color = "green"
@@ -187,19 +268,15 @@ def fetch_network_status():
             elif lan_latency == 0 or lan_latency > 2000:
                 lan_status = "Down"
                 lan_color = "red"
-                check_and_log(display_name, "Critical", "LAN Connectivity", "LAN Unreachable", "Ping Timeout")
-            elif lan_dns > 500:
+            elif lan_dns > 500 or (lan_dns == 0 and lan_latency > 0): 
                 lan_status = "DNS Failure"
                 lan_color = "red"
-                check_and_log(display_name, "Critical", "LAN DNS", "DNS Resolution Failed", f"Time: {lan_dns}ms")
             elif lan_dns > 100:
                 lan_status = "Slow DNS"
                 lan_color = "orange"
-                check_and_log(display_name, "Warning", "LAN DNS", "Slow DNS Response", f"Time: {lan_dns}ms")
             elif lan_latency > 100:
                 lan_status = "Laggy"
                 lan_color = "orange"
-                check_and_log(display_name, "Warning", "LAN Latency", "High Latency", f"Ping: {lan_latency}ms")
 
             lan_probes.append({
                 "name": display_name,
@@ -209,15 +286,23 @@ def fetch_network_status():
                 "color": lan_color,
                 "latency": round(lan_latency, 2), 
                 "dns": round(lan_dns, 2),
+                "down": round(lan_down, 1), # Add Download
+                "up": round(lan_up, 1),     # Add Upload
                 "lat": float(metric_labels.get('latitude', '0')),
                 "lng": float(metric_labels.get('longitude', '0'))
             })
 
             # WLAN
             try:
-                wlan_latency = float(metric_labels.get('wlan_google_response_time', '0'))
                 wlan_dns = float(metric_labels.get('wlan_dns_response_time', '0'))
-            except ValueError: wlan_latency, wlan_dns = 0.0, 0.0
+            except ValueError:
+                wlan_dns = 0.0
+
+            # Lookup Speeds
+            wlan_down = wlan_down_map.get(raw_hostname, 0)
+            wlan_up = wlan_up_map.get(raw_hostname, 0)
+            # Lookup Latency
+            wlan_latency = wlan_ping_map.get(raw_hostname, 0)
 
             wlan_status = "Active"
             wlan_color = "green"
@@ -233,19 +318,15 @@ def fetch_network_status():
             elif wlan_latency == 0 or wlan_latency > 2000:
                 wlan_status = "Down"
                 wlan_color = "red"
-                check_and_log(display_name, "Critical", "WLAN Connectivity", "Wi-Fi Unreachable", "Ping Timeout")
-            elif wlan_dns > 500:
+            elif wlan_dns > 500 or (wlan_dns == 0 and wlan_latency > 0):
                 wlan_status = "DNS Failure"
                 wlan_color = "red"
-                check_and_log(display_name, "Critical", "WLAN DNS", "DNS Resolution Failed", f"Time: {wlan_dns}ms")
             elif wlan_dns > 100:
                 wlan_status = "Slow DNS"
                 wlan_color = "orange"
-                check_and_log(display_name, "Warning", "WLAN DNS", "Slow DNS Response", f"Time: {wlan_dns}ms")
             elif wlan_latency > 200:
                 wlan_status = "Laggy"
                 wlan_color = "orange"
-                check_and_log(display_name, "Warning", "WLAN Latency", "High Latency", f"Ping: {wlan_latency}ms")
 
             wlan_probes.append({
                 "name": display_name,
@@ -255,25 +336,17 @@ def fetch_network_status():
                 "color": wlan_color,
                 "latency": round(wlan_latency, 2), 
                 "dns": round(wlan_dns, 2),
+                "down": round(wlan_down, 1), # Add Download
+                "up": round(wlan_up, 1),     # Add Upload
                 "lat": float(metric_labels.get('latitude', '0')),
                 "lng": float(metric_labels.get('longitude', '0'))
             })
-
-            # --- AI CHECK (Run periodically here too?) ---
-            # To avoid performance hit, maybe only run simple checks here.
-            # Or run AI detection:
-            try:
-                # We need speed for AI, but this loop only has labels.
-                # Just skipping heavy AI here for loop performance. 
-                # Ideally, a separate thread handles detailed analysis.
-                pass 
-            except: pass
 
         return {"lan": lan_probes, "wlan": wlan_probes}
     except Exception as e:
         print(f"❌ DEBUG: Exception: {e}")
         return _mock_pulse_data()
-
+        
 # --- PAGE 2: COMMAND CENTER LOGIC ---
 def fetch_command_center():
     data = fetch_network_status()

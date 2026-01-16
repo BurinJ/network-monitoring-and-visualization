@@ -75,7 +75,7 @@ const Sidebar = ({ isOpen, toggleSidebar, user, onLogout }) => {
 
       <nav className="flex-1 px-3 py-6 overflow-y-auto scrollbar-hide">
         <NavItem to="/" icon={<Activity size={20} />} label="Connectivity Status" />
-        <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Network Operations" />
+        <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Overview Dashboard" />
         <NavItem to={`/inspector/${defaultProbe}`} icon={<Search size={20} />} label="Probe Inspection" />
         <NavItem to="/trends" icon={<TrendingUp size={20} />} label="Trends" />
         <NavItem to="/history" icon={<History size={20} />} label="Alert History" />

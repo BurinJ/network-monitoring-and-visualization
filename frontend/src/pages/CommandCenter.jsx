@@ -170,7 +170,7 @@ const CommandCenter = () => {
 
   return (
     <div className="p-6 bg-teal-50 min-h-screen">
-      <h1 className="text-2xl font-bold text-teal-900 mb-6">Network Operations</h1>
+      <h1 className="text-2xl font-bold text-teal-900 mb-6">Overview Dashboard</h1>
 
       <div className="grid grid-cols-12 gap-6">
         {/* Top Cards Row */}

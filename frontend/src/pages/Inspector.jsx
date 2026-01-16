@@ -3,8 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ChevronDown, ArrowDown, ArrowUp, Globe, Network, Activity, AlertTriangle, CheckCircle, Eye, EyeOff } from 'lucide-react';
 import { API_BASE_URL } from '../config'; 
 
-// --- GENERIC TREND GRAPH COMPONENT (Renamed from SpeedHistoryGraph) ---
-// Can handle 2 lines (Ping) or 4 lines (Speed Up/Down)
+// --- GENERIC TREND GRAPH COMPONENT ---
 const TrendGraph = ({ 
   historyDown, historyUp, 
   avgDown, avgUp, 
@@ -70,9 +69,9 @@ const TrendGraph = ({
               className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
                 showDown ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-50 text-gray-400 border-gray-200'
               }`}
-              title={showDown ? "Hide Download" : "Show Download"}
+              title={showDown ? "Hide Primary" : "Show Primary"}
             >
-              {showDown ? <Eye size={10} /> : <EyeOff size={10} />} DL
+              {showDown ? <Eye size={10} /> : <EyeOff size={10} />} {historyUp ? 'DL' : 'Ext'}
             </button>
             
             {historyUp && (
@@ -81,9 +80,9 @@ const TrendGraph = ({
                 className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
                   showUp ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
                 }`}
-                title={showUp ? "Hide Upload" : "Show Upload"}
+                title={showUp ? "Hide Secondary" : "Show Secondary"}
               >
-                {showUp ? <Eye size={10} /> : <EyeOff size={10} />} UL
+                {showUp ? <Eye size={10} /> : <EyeOff size={10} />} {title.includes("Ping") ? 'Int' : 'UL'}
               </button>
             )}
           </div>
@@ -92,7 +91,7 @@ const TrendGraph = ({
       </div>
 
       <div className="relative" style={{ height: `${height}px` }}>
-        {/* Y-Axis Indicators - Moved outside overflow-hidden container */}
+        {/* Y-Axis Indicators */}
         <div className="absolute left-[-32px] top-0 bottom-0 w-8 flex flex-col justify-between text-[9px] text-gray-400 font-mono pointer-events-none pr-1 text-right z-10">
           <span>{Math.round(maxVal)}</span>
           <span>{Math.round(maxVal / 2)}</span>
@@ -102,7 +101,7 @@ const TrendGraph = ({
         <div className="relative border-b border-l border-slate-100 bg-slate-50/30 rounded-sm overflow-hidden h-full w-full">
           <svg viewBox={`0 0 300 ${height}`} className="w-full h-full" preserveAspectRatio="none">
             
-            {/* --- LINE 1 (Download or Ping) --- */}
+            {/* --- LINE 1 (Download or External Ping) --- */}
             {showDown && (
               <>
                 <polyline 
@@ -130,7 +129,7 @@ const TrendGraph = ({
                       fill="#10b981" 
                       className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
                     >
-                      <title>{`${formatTime(d[0])} - ${historyUp ? 'Download: ' : ''}${Math.round(d[1])} ${unit}`}</title>
+                      <title>{`${formatTime(d[0])} - ${historyUp ? (title.includes("Ping") ? 'External: ' : 'Download: ') : ''}${Math.round(d[1])} ${unit}`}</title>
                     </circle>
                   );
                 })}
@@ -148,7 +147,7 @@ const TrendGraph = ({
               </>
             )}
 
-            {/* --- LINE 2 (Upload - Optional) --- */}
+            {/* --- LINE 2 (Upload or Internal Ping) --- */}
             {showUp && historyUp && (
               <>
                 <polyline 
@@ -169,7 +168,7 @@ const TrendGraph = ({
                       fill="#3b82f6" 
                       className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
                     >
-                      <title>{`${formatTime(d[0])} - Upload: ${Math.round(d[1])} ${unit}`}</title>
+                      <title>{`${formatTime(d[0])} - ${title.includes("Ping") ? 'Internal: ' : 'Upload: '}${Math.round(d[1])} ${unit}`}</title>
                     </circle>
                   );
                 })}
@@ -191,8 +190,8 @@ const TrendGraph = ({
       </div>
       
       <div className="flex justify-between mt-1 text-[9px] text-slate-400 font-mono pl-1">
-        <span>{showDown ? `Avg ${historyUp ? 'DL' : ''}: ${Math.round(avgDown)} ${unit}` : ''}</span>
-        {historyUp && <span>{showUp ? `Avg UL: ${Math.round(avgUp)} ${unit}` : ''}</span>}
+        <span>{showDown ? `Avg ${historyUp ? (title.includes("Ping") ? 'Ext' : 'DL') : ''}: ${Math.round(avgDown)} ${unit}` : ''}</span>
+        {historyUp && <span>{showUp ? `Avg ${title.includes("Ping") ? 'Int' : 'UL'}: ${Math.round(avgUp)} ${unit}` : ''}</span>}
       </div>
     </div>
   );
@@ -326,12 +325,15 @@ const Inspector = () => {
       <h4 className="font-bold text-teal-600 text-xs uppercase mb-4 flex items-center gap-2 border-b border-teal-50 pb-2">
         <Activity size={14} /> Latency Trends
       </h4>
+      {/* Pass External history as historyDown (primary) and Internal history as historyUp (secondary) */}
       <TrendGraph 
         title={`Ping History (${timeRange})`}
-        historyDown={history} 
-        avgDown={average}     
+        historyDown={history.external} // External
+        historyUp={history.internal}   // Internal
+        avgDown={average.external}     // External Avg
+        avgUp={average.internal}       // Internal Avg
         color={color}
-        height={80} 
+        height={100} 
         unit="ms"
       />
     </div>

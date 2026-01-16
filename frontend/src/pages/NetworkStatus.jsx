@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock } from 'lucide-react'; // Icon for locked items
+import { Lock, ArrowDown, ArrowUp, Activity } from 'lucide-react';
 
 const NetworkStatus = ({ user }) => {
   const [data, setData] = useState(null);
@@ -15,47 +15,74 @@ const NetworkStatus = ({ user }) => {
   }, []);
 
   const handleInspect = (probeName) => {
-    // Only allow navigation if user is admin
-    if (/*user?.role === 'admin'*/ user?.role !== null) {
+    if (user?.role === 'admin') {
       navigate(`/inspector/${probeName}`);
     } else {
-      // If not admin/logged in, redirect to login
       navigate('/login');
     }
   };
 
-  if (loading) return <div className="p-10 text-center text-teal-600 font-medium">Scanning Network...</div>;
+  if (loading) return <div className="p-10 text-center text-teal-600 font-medium animate-pulse">Scanning Network...</div>;
 
   const buildings = data?.buildings || { lan: [], wlan: [] };
 
   const StatusCard = ({ item }) => {
-    // const isClickable = user?.role === 'admin';
-    const isClickable = user?.role != null;
+    const isClickable = user?.role === 'admin';
+
     return (
       <div 
         onClick={() => handleInspect(item.name)}
-        className={`p-4 border border-teal-100 rounded-xl flex justify-between items-center transition bg-white group relative
-          ${isClickable ? 'hover:shadow-lg cursor-pointer hover:border-teal-300' : 'opacity-90 cursor-default'}
+        className={`p-4 border border-teal-100 rounded-xl bg-white group relative transition-all duration-200
+          ${isClickable ? 'hover:shadow-md cursor-pointer hover:border-teal-300' : 'opacity-90 cursor-default'}
         `}
       >
-        <div>
-          <span className={`font-bold block transition ${isClickable ? 'text-slate-700 group-hover:text-teal-700' : 'text-slate-600'}`}>
-            {item.name}
-          </span>
-          <span className="text-xs text-gray-400">DNS: {item.dns}ms</span>
-        </div>
-        <div className="text-right flex items-center gap-3">
-           {/* Show lock icon if not eligible to inspect */}
-           {!isClickable && <Lock size={14} className="text-slate-300" />}
-           <div>
-            <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider
-              ${item.color === 'green' ? 'bg-emerald-100 text-emerald-700' : 
-                item.color === 'orange' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>
-              <span className={`w-2 h-2 rounded-full ${item.color === 'green' ? 'bg-emerald-500' : item.color === 'orange' ? 'bg-orange-500' : 'bg-red-500'}`}></span>
-              {item.status}
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <span className={`font-bold block text-lg ${isClickable ? 'text-slate-700 group-hover:text-teal-700' : 'text-slate-600'}`}>
+              {item.name}
             </span>
-            <div className="text-xs text-gray-500 mt-1 font-mono">{item.latency}ms</div>
+            <span className="text-xs text-gray-400 font-medium">{item.type}</span>
           </div>
+          
+          <div className="flex flex-col items-end gap-1">
+             {!isClickable && <Lock size={14} className="text-slate-300 mb-1" />}
+             <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider
+                ${item.color === 'green' ? 'bg-emerald-100 text-emerald-700' : 
+                  item.color === 'orange' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${item.color === 'green' ? 'bg-emerald-500' : item.color === 'orange' ? 'bg-orange-500' : 'bg-red-500'}`}></span>
+                {item.status}
+             </span>
+          </div>
+        </div>
+
+        {/* Metrics Grid */}
+        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-teal-50">
+           <div className="flex flex-col items-center">
+             <div className="flex items-center gap-1 text-xs text-slate-400 mb-0.5">
+               <ArrowDown size={12} className="text-emerald-500" /> Down
+             </div>
+             <span className="font-mono text-sm font-bold text-slate-700">
+               {item.down ? item.down : '-'} <span className="text-[10px] font-normal text-slate-400">Mbps</span>
+             </span>
+           </div>
+
+           <div className="flex flex-col items-center border-l border-teal-50">
+             <div className="flex items-center gap-1 text-xs text-slate-400 mb-0.5">
+               <ArrowUp size={12} className="text-blue-500" /> Up
+             </div>
+             <span className="font-mono text-sm font-bold text-slate-700">
+               {item.up ? item.up : '-'} <span className="text-[10px] font-normal text-slate-400">Mbps</span>
+             </span>
+           </div>
+
+           <div className="flex flex-col items-center border-l border-teal-50">
+             <div className="flex items-center gap-1 text-xs text-slate-400 mb-0.5">
+               <Activity size={12} className="text-purple-500" /> Ping
+             </div>
+             <span className="font-mono text-sm font-bold text-slate-700">
+               {item.latency} <span className="text-[10px] font-normal text-slate-400">ms</span>
+             </span>
+           </div>
         </div>
       </div>
     );
@@ -64,10 +91,9 @@ const NetworkStatus = ({ user }) => {
   return (
     <div className="p-8 bg-teal-50 min-h-screen">
       <div className="text-center mb-10">
-        <h1 className="text-4xl font-bold text-teal-900 mb-2">Network Status</h1>
-        <p className="text-teal-600">Real-time connectivity monitoring</p>
+        <h1 className="text-4xl font-bold text-teal-900 mb-2">Connectivity Status</h1>
+        <p className="text-teal-600">Real-time performance metrics</p>
         
-        {/* Prompt to login if not authenticated */}
         {!user && (
           <button 
             onClick={() => navigate('/login')}
@@ -78,28 +104,28 @@ const NetworkStatus = ({ user }) => {
         )}
       </div>
 
-      <div className={`max-w-6xl mx-auto border-2 rounded-2xl p-8 flex items-center justify-between mb-12 shadow-sm bg-white
+      <div className={`max-w-6xl mx-auto border-2 rounded-2xl p-6 flex items-center justify-between mb-12 shadow-sm bg-white
         ${data?.overall === 'Operational' ? 'border-emerald-400' : 'border-red-400'}`}>
         <div>
-          <h2 className={`text-3xl font-bold ${data?.overall === 'Operational' ? 'text-emerald-700' : 'text-red-700'}`}>
+          <h2 className={`text-2xl font-bold ${data?.overall === 'Operational' ? 'text-emerald-700' : 'text-red-700'}`}>
              {data?.overall === 'Operational' ? '✅ System Healthy' : '⚠️ Service Disruption'}
           </h2>
-          <p className="mt-2 text-slate-600">
+          <p className="mt-1 text-sm text-slate-600">
             {data?.overall === 'Operational' 
-              ? 'All LAN and WLAN interfaces are performing within optimal parameters.' 
-              : 'Attention required: Issues detected in one or more network segments.'}
+              ? 'All interfaces are performing within optimal parameters.' 
+              : 'Issues detected in one or more network segments.'}
           </p>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* LAN SECTION */}
-        <div className="bg-white/50 p-6 rounded-2xl border border-teal-100">
-          <h3 className="text-xl font-bold text-teal-800 mb-6 flex items-center gap-3 border-b border-teal-200 pb-4">
-            <span className="p-2 bg-teal-100 rounded-lg text-teal-600">🌐</span> Ethernet (LAN)
+        <div>
+          <h3 className="text-lg font-bold text-teal-800 mb-4 flex items-center gap-2">
+            <span className="p-1.5 bg-teal-100 rounded-lg text-teal-600">🌐</span> Ethernet (LAN)
           </h3>
-          <div className="flex flex-col gap-3">
-            {buildings.lan.length === 0 && <div className="text-gray-400 italic text-center py-4">No active LAN monitors found.</div>}
+          <div className="grid grid-cols-1 md:grid-cols-1">
+            {buildings.lan.length === 0 && <div className="col-span-2 text-gray-400 italic text-center py-4">No active LAN monitors found.</div>}
             {buildings.lan.map((place) => (
               <StatusCard key={place.id + 'lan'} item={place} />
             ))}
@@ -107,12 +133,12 @@ const NetworkStatus = ({ user }) => {
         </div>
 
         {/* WLAN SECTION */}
-        <div className="bg-white/50 p-6 rounded-2xl border border-teal-100">
-          <h3 className="text-xl font-bold text-teal-800 mb-6 flex items-center gap-3 border-b border-teal-200 pb-4">
-            <span className="p-2 bg-teal-100 rounded-lg text-teal-600">📶</span> Wi-Fi (WLAN)
+        <div>
+          <h3 className="text-lg font-bold text-teal-800 mb-4 flex items-center gap-2">
+            <span className="p-1.5 bg-purple-100 rounded-lg text-purple-600">📶</span> Wi-Fi (WLAN)
           </h3>
-          <div className="flex flex-col gap-3">
-            {buildings.wlan.length === 0 && <div className="text-gray-400 italic text-center py-4">No active Wi-Fi monitors found.</div>}
+          <div className="grid grid-cols-1 md:grid-cols-1">
+            {buildings.wlan.length === 0 && <div className="col-span-2 text-gray-400 italic text-center py-4">No active Wi-Fi monitors found.</div>}
             {buildings.wlan.map((place) => (
               <StatusCard key={place.id + 'wlan'} item={place} />
             ))}
