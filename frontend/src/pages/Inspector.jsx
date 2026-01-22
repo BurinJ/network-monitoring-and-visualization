@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ChevronDown, ArrowDown, ArrowUp, Globe, Network, Activity, AlertTriangle, CheckCircle, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ArrowDown, ArrowUp, Globe, Network, Activity, AlertTriangle, CheckCircle, Eye, EyeOff, Layers, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '../config'; 
 
 // --- GENERIC TREND GRAPH COMPONENT ---
@@ -10,17 +10,24 @@ const TrendGraph = ({
   color = 'teal', 
   height = 80,
   title = "Trend",
-  unit = "Mbps"
+  unit = "Mbps",
+  labelDown = "DL", // Custom label for primary line
+  labelUp = "UL",   // Custom label for secondary line
+  tooltipDown = "Download", // Full text for tooltip
+  tooltipUp = "Upload"      // Full text for tooltip
 }) => {
   const [showDown, setShowDown] = useState(true);
   const [showUp, setShowUp] = useState(true);
 
-  if (!historyDown || historyDown.length === 0) return <div className={`h-[${height}px] flex items-center justify-center text-xs text-gray-300`}>No History Data</div>;
+  // Safety check: Ensure historyDown is actually an array
+  if (!historyDown || !Array.isArray(historyDown) || historyDown.length === 0) {
+    return <div className={`h-[${height}px] flex items-center justify-center text-xs text-gray-300`}>No History Data</div>;
+  }
 
   // Determine active datasets for scaling
   let activeVals = [];
   if (showDown) activeVals = [...activeVals, ...historyDown.map(d => d[1])];
-  if (showUp && historyUp) activeVals = [...activeVals, ...historyUp.map(d => d[1])];
+  if (showUp && historyUp && Array.isArray(historyUp)) activeVals = [...activeVals, ...historyUp.map(d => d[1])];
   
   // If nothing is shown, use a default range
   const maxVal = activeVals.length > 0 ? Math.max(...activeVals, 10) : 100;
@@ -40,7 +47,7 @@ const TrendGraph = ({
   };
 
   const generatePoints = (data) => {
-    if (!data) return '';
+    if (!data || !Array.isArray(data)) return '';
     return data.map((d, i) => {
       const x = (i / (data.length - 1)) * 300;
       const y = height - ((d[1] - minVal) / range) * height;
@@ -69,20 +76,20 @@ const TrendGraph = ({
               className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
                 showDown ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-50 text-gray-400 border-gray-200'
               }`}
-              title={showDown ? "Hide Primary" : "Show Primary"}
+              title={showDown ? `Hide ${tooltipDown}` : `Show ${tooltipDown}`}
             >
-              {showDown ? <Eye size={10} /> : <EyeOff size={10} />} {historyUp ? 'DL' : 'Ext'}
+              {showDown ? <Eye size={10} /> : <EyeOff size={10} />} {labelDown}
             </button>
             
-            {historyUp && (
+            {historyUp && Array.isArray(historyUp) && (
               <button 
                 onClick={() => setShowUp(!showUp)}
                 className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
                   showUp ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
                 }`}
-                title={showUp ? "Hide Secondary" : "Show Secondary"}
+                title={showUp ? `Hide ${tooltipUp}` : `Show ${tooltipUp}`}
               >
-                {showUp ? <Eye size={10} /> : <EyeOff size={10} />} {title.includes("Ping") ? 'Int' : 'UL'}
+                {showUp ? <Eye size={10} /> : <EyeOff size={10} />} {labelUp}
               </button>
             )}
           </div>
@@ -101,7 +108,7 @@ const TrendGraph = ({
         <div className="relative border-b border-l border-slate-100 bg-slate-50/30 rounded-sm overflow-hidden h-full w-full">
           <svg viewBox={`0 0 300 ${height}`} className="w-full h-full" preserveAspectRatio="none">
             
-            {/* --- LINE 1 (Download or External Ping) --- */}
+            {/* --- LINE 1 (Primary) --- */}
             {showDown && (
               <>
                 <polyline 
@@ -129,7 +136,7 @@ const TrendGraph = ({
                       fill="#10b981" 
                       className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
                     >
-                      <title>{`${formatTime(d[0])} - ${historyUp ? (title.includes("Ping") ? 'External: ' : 'Download: ') : ''}${Math.round(d[1])} ${unit}`}</title>
+                      <title>{`${formatTime(d[0])} - ${historyUp ? `${tooltipDown}: ` : ''}${Math.round(d[1])} ${unit}`}</title>
                     </circle>
                   );
                 })}
@@ -147,7 +154,7 @@ const TrendGraph = ({
               </>
             )}
 
-            {/* --- LINE 2 (Upload or Internal Ping) --- */}
+            {/* --- LINE 2 (Secondary) --- */}
             {showUp && historyUp && (
               <>
                 <polyline 
@@ -168,7 +175,7 @@ const TrendGraph = ({
                       fill="#3b82f6" 
                       className="hover:r-5 transition-all cursor-pointer opacity-0 hover:opacity-100"
                     >
-                      <title>{`${formatTime(d[0])} - ${title.includes("Ping") ? 'Internal: ' : 'Upload: '}${Math.round(d[1])} ${unit}`}</title>
+                      <title>{`${formatTime(d[0])} - ${tooltipUp}: ${Math.round(d[1])} ${unit}`}</title>
                     </circle>
                   );
                 })}
@@ -190,8 +197,8 @@ const TrendGraph = ({
       </div>
       
       <div className="flex justify-between mt-1 text-[9px] text-slate-400 font-mono pl-1">
-        <span>{showDown ? `Avg ${historyUp ? (title.includes("Ping") ? 'Ext' : 'DL') : ''}: ${Math.round(avgDown)} ${unit}` : ''}</span>
-        {historyUp && <span>{showUp ? `Avg ${title.includes("Ping") ? 'Int' : 'UL'}: ${Math.round(avgUp)} ${unit}` : ''}</span>}
+        <span>{showDown ? `Avg ${historyUp ? labelDown : ''}: ${Math.round(avgDown)} ${unit}` : ''}</span>
+        {historyUp && <span>{showUp ? `Avg ${labelUp}: ${Math.round(avgUp)} ${unit}` : ''}</span>}
       </div>
     </div>
   );
@@ -201,17 +208,63 @@ const Inspector = () => {
   const { probeId } = useParams();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
-  const [probes, setProbes] = useState([]);
+  
+  // State for selectors
+  const [allProbes, setAllProbes] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [selectedDept, setSelectedDept] = useState('All');
+  const [thresholds, setThresholds] = useState({
+    lan_ping: 100,
+    wlan_ping: 200,
+    dns: 100
+  });
+  
   const [timeRange, setTimeRange] = useState('24h');
 
-  // 1. Fetch Probe List for Dropdown
+  // 1. Fetch Probe List and Thresholds
   useEffect(() => {
     const baseUrl = typeof API_BASE_URL !== 'undefined' ? API_BASE_URL : 'http://localhost:5000/api';
-    fetch(`${baseUrl}/probes`)
+    
+    // Fetch Probes
+    fetch(`${baseUrl}/settings/probes`)
       .then(res => res.json())
-      .then(setProbes)
+      .then(data => {
+        setAllProbes(data);
+        const depts = Array.from(new Set(data.map(p => p.department || 'Undefined')));
+        setDepartments(['All', ...depts.sort()]);
+        
+        const current = data.find(p => p.name === probeId);
+        if (current) {
+            setSelectedDept(current.department || 'Undefined');
+        }
+      })
       .catch(console.error);
+
+    // Fetch Thresholds
+    fetch(`${baseUrl}/settings/thresholds`)
+      .then(res => res.json())
+      .then(data => {
+        if(data) {
+          setThresholds({
+            lan_ping: data.lan_ping_threshold || 100,
+            wlan_ping: data.wlan_ping_threshold || 200,
+            dns: data.dns_threshold || 100
+          });
+        }
+      })
+      .catch(console.error);
+
   }, []);
+
+  // Update selected department when probeId changes
+  useEffect(() => {
+    if (allProbes.length > 0) {
+        const current = allProbes.find(p => p.name === probeId);
+        if (current) {
+            setSelectedDept(current.department || 'Undefined');
+        }
+    }
+  }, [probeId, allProbes]);
 
   // 2. Fetch Data for Selected Probe and Time Range
   useEffect(() => {
@@ -227,13 +280,27 @@ const Inspector = () => {
     navigate(`/inspector/${e.target.value}`);
   };
 
+  const handleDeptChange = (e) => {
+    const newDept = e.target.value;
+    setSelectedDept(newDept);
+    
+    const firstProbe = allProbes.find(p => (newDept === 'All' || (p.department || 'Undefined') === newDept));
+    if (firstProbe && firstProbe.name !== probeId) {
+        navigate(`/inspector/${firstProbe.name}`);
+    }
+  };
+
   const handleTimeRangeChange = (range) => {
     setTimeRange(range);
   };
 
+  // Filter probes for dropdown
+  const filteredProbes = allProbes
+    .filter(p => selectedDept === 'All' || (p.department || 'Undefined') === selectedDept)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   if (!data) return <div className="p-10 text-teal-600 font-medium animate-pulse">Loading Probe Data...</div>;
 
-  // Destructure with default empty list for diagnoses
   const { ai_diagnoses = [], metrics, has_wlan } = data;
   const showWlan = has_wlan !== undefined ? has_wlan : (metrics.wlan.ping > 0 || metrics.wlan.dns > 0);
 
@@ -320,21 +387,24 @@ const Inspector = () => {
     </div>
   );
 
-  const LatencySection = ({ history, average, color }) => (
+  const LatencySection = ({ history, average, color, pingThreshold, dnsThreshold }) => (
     <div className="bg-white border border-teal-100 rounded-lg p-4 shadow-sm">
       <h4 className="font-bold text-teal-600 text-xs uppercase mb-4 flex items-center gap-2 border-b border-teal-50 pb-2">
         <Activity size={14} /> Latency Trends
       </h4>
-      {/* Pass External history as historyDown (primary) and Internal history as historyUp (secondary) */}
       <TrendGraph 
         title={`Ping History (${timeRange})`}
-        historyDown={history.external} // External
-        historyUp={history.internal}   // Internal
-        avgDown={average.external}     // External Avg
-        avgUp={average.internal}       // Internal Avg
+        historyDown={history.external} 
+        historyUp={history.internal}   
+        avgDown={average.external}     
+        avgUp={average.internal}       
         color={color}
         height={100} 
         unit="ms"
+        labelDown="Ext"
+        labelUp="Int"
+        tooltipDown="External Ping"
+        tooltipUp="Internal Ping"
       />
     </div>
   );
@@ -345,20 +415,42 @@ const Inspector = () => {
       {/* Header Row */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
          <div>
-            <h1 className="text-2xl font-bold text-teal-900 mb-1">Network Inspection</h1>
-            <div className="flex items-center text-sm text-teal-600">
-              <span className="mr-2">Inspecting:</span>
-              <div className="relative inline-block">
-                <select 
-                  value={probeId} 
-                  onChange={handleProbeChange}
-                  className="appearance-none bg-white border border-teal-200 hover:border-teal-400 text-teal-800 font-bold py-1 pl-3 pr-8 rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
-                >
-                  {probes.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-teal-600">
-                  <ChevronDown size={14} />
-                </div>
+            <h1 className="text-2xl font-bold text-teal-900 mb-1">Probe Inspection</h1>
+            <div className="flex flex-col sm:flex-row sm:items-center text-sm text-teal-600 gap-2">
+              <span className="mr-1 hidden sm:inline">Inspect:</span>
+              
+              <div className="flex gap-2">
+                  {/* Department Selector */}
+                  <div className="relative inline-block">
+                    <select 
+                      value={selectedDept} 
+                      onChange={handleDeptChange}
+                      className="appearance-none bg-teal-50 border border-teal-200 hover:border-teal-400 text-teal-800 font-medium py-1 pl-3 pr-8 rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer w-32 md:w-auto"
+                    >
+                      {departments.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-teal-500">
+                      <Layers size={14} />
+                    </div>
+                  </div>
+
+                  {/* Probe Selector */}
+                  <div className="relative inline-block">
+                    <select 
+                      value={probeId} 
+                      onChange={handleProbeChange}
+                      className="appearance-none bg-white border border-teal-200 hover:border-teal-400 text-teal-800 font-bold py-1 pl-3 pr-8 rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer w-48 md:w-auto"
+                    >
+                      {filteredProbes.map(p => (
+                        <option key={p.id} value={p.name}>{p.name}</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-teal-600">
+                      <ChevronDown size={14} />
+                    </div>
+                  </div>
               </div>
             </div>
          </div>
@@ -376,7 +468,11 @@ const Inspector = () => {
                 {range.toUpperCase()}
               </button>
             ))}
-            <Link to="/admin" className="ml-4 bg-white border border-teal-200 shadow-sm px-4 py-1.5 rounded text-sm text-teal-700 hover:bg-teal-50 transition-colors flex items-center">
+            <Link to={`/forecast/${probeId}`} className="ml-2 bg-purple-600 text-white shadow-sm px-4 py-1.5 rounded text-sm hover:bg-purple-700 transition-colors flex items-center gap-2">
+              <TrendingUp size={16} /> Predict
+            </Link>
+
+            <Link to="/admin" className="ml-2 bg-white border border-teal-200 shadow-sm px-4 py-1.5 rounded text-sm text-teal-700 hover:bg-teal-50 transition-colors flex items-center">
               Back to Issues
             </Link>
          </div>
@@ -412,14 +508,16 @@ const Inspector = () => {
           <IpDisplay v4={metrics.lan.ipv4} v6={metrics.lan.ipv6} />
 
           <div className="grid grid-cols-2 gap-4">
-            <MetricCard label="Ping Latency" value={metrics.lan.ping} unit="ms" ideal={50} />
-            <MetricCard label="DNS Response" value={metrics.lan.dns} unit="ms" ideal={50} />
+            <MetricCard label="Ping Latency" value={metrics.lan.ping} unit="ms" ideal={thresholds.lan_ping} />
+            <MetricCard label="DNS Response" value={metrics.lan.dns} unit="ms" ideal={thresholds.dns} />
           </div>
 
           <LatencySection 
             history={metrics.lan.history.ping} 
             average={metrics.lan.average.ping} 
-            color="emerald" 
+            color="emerald"
+            pingThreshold={thresholds.lan_ping}
+            dnsThreshold={thresholds.dns}
           />
 
           <SpeedSection 
@@ -444,14 +542,16 @@ const Inspector = () => {
             <IpDisplay v4={metrics.wlan.ipv4} v6={metrics.wlan.ipv6} />
 
             <div className="grid grid-cols-2 gap-4">
-              <MetricCard label="Ping Latency" value={metrics.wlan.ping} unit="ms" ideal={100} />
-              <MetricCard label="DNS Response" value={metrics.wlan.dns} unit="ms" ideal={100} />
+              <MetricCard label="Ping Latency" value={metrics.wlan.ping} unit="ms" ideal={thresholds.wlan_ping} />
+              <MetricCard label="DNS Response" value={metrics.wlan.dns} unit="ms" ideal={thresholds.dns} />
             </div>
 
             <LatencySection 
               history={metrics.wlan.history.ping} 
               average={metrics.wlan.average.ping} 
               color="purple" 
+              pingThreshold={thresholds.wlan_ping}
+              dnsThreshold={thresholds.dns}
             />
 
             <SpeedSection 

@@ -1,11 +1,12 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from ai_engine.fetcher import fetch_network_status, fetch_command_center, fetch_inspector_data, fetch_trends_data, save_mapping
+from ai_engine.fetcher import fetch_network_status, fetch_command_center, fetch_inspector_data, fetch_trends_data, fetch_probe_forecast, save_mapping, save_department_mapping
 from ai_engine.trainer import train_models
 from ai_engine import analyzer
 import threading
 import time
 import history
+import settings_manager
 
 app = Flask(__name__)
 CORS(app) 
@@ -47,6 +48,11 @@ def get_inspector(probe_id):
     data = fetch_inspector_data(probe_id, duration)
     return jsonify(data)
 
+@app.route('/api/forecast/<probe_id>', methods=['GET'])
+def get_probe_forecast(probe_id):
+    data = fetch_probe_forecast(probe_id)
+    return jsonify(data)
+
 @app.route('/api/trends', methods=['GET'])
 def get_trends():
     data = fetch_trends_data()
@@ -55,6 +61,7 @@ def get_trends():
 @app.route('/api/probes', methods=['GET'])
 def get_probe_list():
     data = fetch_network_status()
+    # Return friendly names for dropdowns
     names = sorted(list(set(
         [p['name'] for p in data.get('lan', [])] + 
         [p['name'] for p in data.get('wlan', [])]
@@ -63,19 +70,38 @@ def get_probe_list():
 
 @app.route('/api/settings/probes', methods=['GET'])
 def get_settings_probes():
-    # Return list of {id, name} for settings page
     data = fetch_network_status()
+    # print(data.get('lan'))
     all_p = data.get('lan', []) + data.get('wlan', [])
-    # Unique by ID
-    unique_probes = {p['id']: p['name'] for p in all_p}
-    return jsonify([{"id": k, "name": v} for k,v in unique_probes.items()])
+    # Unique by ID to list all raw probes for renaming
+    unique_probes = {p['id']: {'name': p['name'], 'department': p.get('department', 'Undefined')} for p in all_p}
+    # print(unique_probes.items())
+    return jsonify([{"id": k, "name": v['name'], "department": v['department']} for k,v in unique_probes.items()])
 
 @app.route('/api/settings/probe', methods=['POST'])
 def update_probe_name():
     data = request.json
     raw_id = data.get('id')
     new_name = data.get('name')
-    if save_mapping(raw_id, new_name):
+    new_dept = data.get('department')
+    
+    success = True
+    if new_name:
+        if not save_mapping(raw_id, new_name): success = False
+    if new_dept:
+        if not save_department_mapping(raw_id, new_dept): success = False
+        
+    if success:
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 500
+
+@app.route('/api/settings/thresholds', methods=['GET'])
+def get_thresholds():
+    return jsonify(settings_manager.get_settings())
+
+@app.route('/api/settings/thresholds', methods=['POST'])
+def update_thresholds():
+    if settings_manager.update_settings(request.json):
         return jsonify({"status": "success"})
     return jsonify({"status": "error"}), 500
 
@@ -96,6 +122,6 @@ def trigger_training():
         print(f"❌ Training Error: {e}")
         return jsonify({"status": "error", "error": str(e)}), 500
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("🚀 Starting AI Backend Server on http://localhost:5000")
     app.run(debug=True, port=5000)

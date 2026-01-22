@@ -10,6 +10,7 @@ import Trends from './pages/Trends'; // AI Trends
 import Login from './pages/Login'; // Login Page
 import AlertHistory from './pages/AlertHistory'; // Alert
 import Settings from './pages/Settings'; // Settings
+import ForecastDetails from './pages/ForecastDetails'; // Individual Network Forecasting
 
 function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -58,6 +59,7 @@ function App() {
               
               <Route path="/admin" element={user ? <CommandCenter /> : <Navigate to="/login" />} />
               <Route path="/inspector/:probeId" element={user ? <Inspector /> : <Navigate to="/login" />} />
+              <Route path="/forecast/:probeId" element={user ? <ForecastDetails /> : <Navigate to="/login" />} />
               <Route path="/trends" element={user ? <Trends /> : <Navigate to="/login" />} />
               <Route path="/history" element={user ? <AlertHistory /> : <Navigate to="/login" />} />
               <Route path="/settings" element={user ? <Settings /> : <Navigate to="/login" />} />

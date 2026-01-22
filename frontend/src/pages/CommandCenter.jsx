@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 // Import Leaflet components (Error handling if not installed)
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet';
-import { Filter, AlertCircle, AlertTriangle, Cpu, ChevronDown, Check, X } from 'lucide-react';
+import { Filter, AlertCircle, AlertTriangle, Cpu, ChevronDown, Check, X, Layers, Network, Wifi, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -60,47 +60,65 @@ const MiniDonut = ({ label, active, total, colorClass }) => {
 const CommandCenter = () => {
   const [stats, setStats] = useState(null);
   const [networkData, setNetworkData] = useState(null);
+  const [trendsData, setTrendsData] = useState(null);
   const navigate = useNavigate();
 
   // Filter States
   const [availableTypes, setAvailableTypes] = useState([]);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  
+  // Department Filter
+  const [departments, setDepartments] = useState([]);
+  const [selectedDept, setSelectedDept] = useState('All');
+  
+  // Heatmap Toggle
+  const [heatmapMode, setHeatmapMode] = useState('WLAN'); // 'LAN' or 'WLAN'
+
+  // Sort State
+  const [sortConfig, setSortConfig] = useState({ key: 'severity', direction: 'desc' });
+  
   const filterRef = useRef(null);
 
-  // Helper to normalize issue types (e.g. group "Offline (~2h)" and "Offline (~5m)" as "Offline")
+  // Helper to normalize issue types
   const getIssueCategory = (issue) => {
     if (issue.startsWith("Offline")) return "Offline";
     return issue;
   };
 
   useEffect(() => {
+    // Fetch Command Center Stats
     fetch('http://localhost:5000/api/command-center')
       .then(res => res.json())
       .then(data => {
         setStats(data);
-        // Extract unique issue types using normalized categories
         if (data.priority_issues) {
           const types = Array.from(new Set(data.priority_issues.map(i => getIssueCategory(i.issue))));
           setAvailableTypes(types);
-          
-          // Initial load: select all if empty (or update if new types appear)
           setSelectedFilters(prev => {
              if (prev.length === 0) return types;
-             // Add any new types that appeared but keep existing selection state
              const newTypes = types.filter(t => !prev.includes(t));
-             // If we have new types, we could add them, but standard behavior is usually to respect user selection.
-             // For now, if user hasn't interacted (empty prev isn't possible if types existed), just use prev.
-             // But if this is first load, types is the set.
              return prev; 
           });
         }
       })
       .catch(console.error);
 
+    // Fetch Network Status (Used for donut, filters, and heatmap)
     fetch('http://localhost:5000/api/network-status')
       .then(res => res.json())
-      .then(setNetworkData)
+      .then(data => {
+        setNetworkData(data);
+        const allProbes = [...(data.buildings?.lan || []), ...(data.buildings?.wlan || [])];
+        const depts = Array.from(new Set(allProbes.map(p => p.department || 'Undefined')));
+        setDepartments(['All', ...depts.sort()]);
+      })
+      .catch(console.error);
+      
+    // Fetch Trends Data
+    fetch('http://localhost:5000/api/trends')
+      .then(res => res.json())
+      .then(setTrendsData)
       .catch(console.error);
   }, []);
 
@@ -115,7 +133,7 @@ const CommandCenter = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [filterRef]);
 
-  // Sync selected filters when available types change (e.g. initial load)
+  // Sync selected filters when available types change
   useEffect(() => {
     if (availableTypes.length > 0 && selectedFilters.length === 0) {
         setSelectedFilters(availableTypes);
@@ -138,14 +156,28 @@ const CommandCenter = () => {
     }
   };
 
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (key === 'severity' && sortConfig.key !== 'severity') {
+      direction = 'desc'; // Default to high-to-low for severity
+    }
+    setSortConfig({ key, direction });
+  };
+
   if (!stats) return <div className="p-10 text-teal-600">Loading Dashboard...</div>;
 
-  const lanProbes = networkData?.buildings?.lan || [];
-  const wlanProbes = networkData?.buildings?.wlan || [];
+  // Filter Data by Department
+  const lanProbes = (networkData?.buildings?.lan || []).filter(p => selectedDept === 'All' || (p.department || 'Undefined') === selectedDept);
+  const wlanProbes = (networkData?.buildings?.wlan || []).filter(p => selectedDept === 'All' || (p.department || 'Undefined') === selectedDept);
+  
   const lanActive = lanProbes.filter(p => p.color !== 'red').length;
   const wlanActive = wlanProbes.filter(p => p.color !== 'red').length;
 
-  // Marker config
+  const visibleProbeNames = new Set([...lanProbes, ...wlanProbes].map(p => p.name));
+  const filteredMapMarkers = (stats.map_markers || []).filter(m => visibleProbeNames.has(m.name));
+
   const getCircleOptions = (color) => {
     const colorMap = {
       green: '#10b981', 
@@ -158,19 +190,74 @@ const CommandCenter = () => {
       fillColor: hex,   
       fillOpacity: 0.6,
       weight: 2,        
-      radius: 6         
+      radius: 4         
     };
   };
 
-  // Filter Logic using normalized categories
   const filteredIssues = stats.priority_issues.filter(issue => {
     const category = getIssueCategory(issue.issue);
-    return selectedFilters.includes(category);
+    const probeName = issue.location.replace(/ \((LAN|WLAN)\)$/, '');
+    const probeData = [...(networkData?.buildings?.lan || []), ...(networkData?.buildings?.wlan || [])].find(p => p.name === probeName);
+    const probeDept = probeData ? (probeData.department || 'Undefined') : 'Undefined';
+    const matchesDept = selectedDept === 'All' || probeDept === selectedDept;
+    return matchesDept && selectedFilters.includes(category);
+  });
+
+  // Sort Issues
+  const sortedIssues = [...filteredIssues].sort((a, b) => {
+    if (sortConfig.key === 'location') {
+        const valA = a.location.toLowerCase();
+        const valB = b.location.toLowerCase();
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+    }
+    if (sortConfig.key === 'severity') {
+        const weight = { 'High': 3, 'Medium': 2, 'Low': 1 }; 
+        const wA = weight[a.severity] || 0;
+        const wB = weight[b.severity] || 0;
+        
+        if (wA !== wB) return sortConfig.direction === 'asc' ? wA - wB : wB - wA;
+        return a.location.localeCompare(b.location);
+    }
+    if (sortConfig.key === 'issue') {
+        return sortConfig.direction === 'asc' 
+           ? a.issue.localeCompare(b.issue)
+           : b.issue.localeCompare(a.issue);
+    }
+    return 0;
+  });
+
+  // Filter Heatmap based on Mode (LAN/WLAN) and Department
+  const heatmapSource = networkData?.buildings?.[heatmapMode.toLowerCase()] || [];
+  const filteredHeatmap = heatmapSource.filter(h => {
+     const probeDept = h.department || 'Undefined';
+     return selectedDept === 'All' || probeDept === selectedDept;
   });
 
   return (
     <div className="p-6 bg-teal-50 min-h-screen">
-      <h1 className="text-2xl font-bold text-teal-900 mb-6">Overview Dashboard</h1>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+        <h1 className="text-2xl font-bold text-teal-900">Network Operations</h1>
+        
+        <div className="relative inline-block">
+            <select 
+            value={selectedDept} 
+            onChange={(e) => setSelectedDept(e.target.value)}
+            className="appearance-none bg-white border border-teal-200 text-teal-800 py-2 pl-10 pr-10 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer font-medium text-sm"
+            >
+            {departments.map(dept => (
+                <option key={dept} value={dept}>{dept}</option>
+            ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center px-3 text-teal-500">
+                <Layers size={16} />
+            </div>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-teal-500">
+                <ChevronDown size={16} />
+            </div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-12 gap-6">
         {/* Top Cards Row */}
@@ -236,10 +323,11 @@ const CommandCenter = () => {
                       <div className="text-center py-4 text-gray-400 text-xs italic">No active error types found</div>
                     ) : (
                       availableTypes.map(type => (
-                        <div 
+                        <button 
                           key={type} 
                           onClick={() => toggleFilter(type)}
-                          className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-teal-50 cursor-pointer transition-colors group"
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-teal-50 cursor-pointer transition-colors text-left"
+                          type="button"
                         >
                           <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
                             selectedFilters.includes(type) 
@@ -251,7 +339,7 @@ const CommandCenter = () => {
                           <span className={`text-sm ${selectedFilters.includes(type) ? 'text-gray-800' : 'text-gray-500'}`}>
                             {type}
                           </span>
-                        </div>
+                        </button>
                       ))
                     )}
                   </div>
@@ -263,10 +351,34 @@ const CommandCenter = () => {
           <div className="flex-1 overflow-auto pr-2">
             <table className="w-full text-left">
               <thead className="bg-teal-50 text-xs uppercase text-teal-600 sticky top-0 z-10">
-                <tr><th className="p-3 bg-teal-50">Location</th><th className="p-3 bg-teal-50">Issue</th><th className="p-3 bg-teal-50">Action</th></tr>
+                <tr>
+                  <th 
+                    className="p-3 bg-teal-50 cursor-pointer hover:bg-teal-100/50 transition-colors"
+                    onClick={() => handleSort('location')}
+                  >
+                    <div className="flex items-center gap-2">
+                      Location
+                      {sortConfig.key === 'location' ? (
+                         sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
+                      ) : <ArrowUpDown size={12} className="opacity-30" />}
+                    </div>
+                  </th>
+                  <th 
+                    className="p-3 bg-teal-50 cursor-pointer hover:bg-teal-100/50 transition-colors"
+                    onClick={() => handleSort('severity')}
+                  >
+                    <div className="flex items-center gap-2">
+                      Issue
+                      {sortConfig.key === 'severity' ? (
+                         sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
+                      ) : <ArrowUpDown size={12} className="opacity-30" />}
+                    </div>
+                  </th>
+                  <th className="p-3 bg-teal-50">Action</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-teal-50">
-                {filteredIssues.length === 0 ? (
+                {sortedIssues.length === 0 ? (
                    <tr><td colSpan="3" className="p-8 text-center text-teal-400 italic">
                      {stats.priority_issues.length > 0 
                        ? "No issues match the selected filters." 
@@ -279,7 +391,7 @@ const CommandCenter = () => {
                      }
                    </td></tr>
                 ) : (
-                  filteredIssues.map((issue, idx) => {
+                  sortedIssues.map((issue, idx) => {
                     const cleanLocation = issue.location.replace(/ \((LAN|WLAN)\)$/, '');
                     const isAI = issue.issue.includes("AI") || issue.issue.includes("Anomaly");
                     
@@ -314,13 +426,13 @@ const CommandCenter = () => {
         <div className="col-span-4 bg-white rounded-xl border border-teal-100 overflow-hidden shadow-sm flex flex-col h-[500px]">
            <div className="p-4 border-b border-teal-50 flex justify-between items-center">
              <h3 className="font-bold text-teal-800">Probe Locations</h3>
-             <span className="text-xs text-teal-500">{stats.map_markers?.length || 0} Points</span>
+             <span className="text-xs text-teal-500">{filteredMapMarkers.length} Points</span>
            </div>
            
            <div className="flex-1 relative z-0">
-             {stats.map_markers && stats.map_markers.length > 0 ? (
+             {filteredMapMarkers.length > 0 ? (
                <MapContainer 
-                 center={[stats.map_markers[0].lat, stats.map_markers[0].lng]} 
+                 center={[filteredMapMarkers[0].lat, filteredMapMarkers[0].lng]} 
                  zoom={15} 
                  style={{ height: "100%", width: "100%" }}
                  scrollWheelZoom={false}
@@ -329,7 +441,7 @@ const CommandCenter = () => {
                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                  />
-                 {stats.map_markers.map((marker, idx) => (
+                 {filteredMapMarkers.map((marker, idx) => (
                    <CircleMarker 
                      key={idx} 
                      center={[marker.lat, marker.lng]} 
@@ -361,6 +473,63 @@ const CommandCenter = () => {
                </div>
              )}
            </div>
+        </div>
+
+        {/* LATENCY HEATMAP PANEL */}
+        <div className="col-span-12 bg-white p-6 rounded-xl shadow-sm border border-teal-100">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-teal-800 flex items-center gap-2">
+                <Cpu size={20} /> Current Latency Heatmap
+            </h3>
+            
+            {/* Heatmap Toggles */}
+            <div className="flex bg-teal-50 p-1 rounded-lg">
+                <button
+                  onClick={() => setHeatmapMode('LAN')}
+                  className={`flex items-center gap-2 px-3 py-1 text-xs font-bold rounded-md transition-all ${
+                    heatmapMode === 'LAN' ? 'bg-white text-teal-700 shadow-sm' : 'text-teal-400 hover:text-teal-600'
+                  }`}
+                >
+                  <Network size={14} /> Wired (LAN)
+                </button>
+                <button
+                  onClick={() => setHeatmapMode('WLAN')}
+                  className={`flex items-center gap-2 px-3 py-1 text-xs font-bold rounded-md transition-all ${
+                    heatmapMode === 'WLAN' ? 'bg-white text-purple-700 shadow-sm' : 'text-teal-400 hover:text-purple-600'
+                  }`}
+                >
+                  <Wifi size={14} /> Wi-Fi (WLAN)
+                </button>
+            </div>
+          </div>
+          
+          <p className="text-sm text-slate-500 mb-4">Real-time snapshot of {heatmapMode === 'LAN' ? 'wired' : 'wireless'} latency across selected departments.</p>
+          
+          {filteredHeatmap.length > 0 ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              {filteredHeatmap.map((probe, i) => (
+                <div 
+                  key={i} 
+                  onClick={() => navigate(`/inspector/${probe.name}`)}
+                  className={`p-4 rounded-lg text-center border transition hover:shadow-md cursor-pointer ${
+                  probe.color === 'red' ? 'bg-red-50 border-red-200' : 
+                  probe.color === 'orange' ? 'bg-orange-50 border-orange-200' :
+                  'bg-teal-50 border-teal-200'
+                }`}>
+                  <div className={`text-xl font-bold ${
+                      probe.color === 'red' ? 'text-red-600' : 
+                      probe.color === 'orange' ? 'text-orange-600' : 
+                      'text-teal-700'
+                  }`}>
+                    {probe.latency}ms
+                  </div>
+                  <div className="text-xs text-slate-500 font-medium mt-1 truncate px-1" title={probe.name}>{probe.name}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+             <div className="text-center py-8 text-teal-400 italic">No heatmap data available for this filter.</div>
+          )}
         </div>
       </div>
     </div>

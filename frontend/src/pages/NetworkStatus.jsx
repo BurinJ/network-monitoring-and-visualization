@@ -1,16 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, ArrowDown, ArrowUp, Activity } from 'lucide-react';
+import { Lock, ArrowDown, ArrowUp, Activity, Filter } from 'lucide-react';
 
 const NetworkStatus = ({ user }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [departments, setDepartments] = useState([]);
+  const [selectedDept, setSelectedDept] = useState('All');
   const navigate = useNavigate();
 
   useEffect(() => {
     fetch('http://localhost:5000/api/network-status')
       .then(res => res.json())
-      .then(res => { setData(res); setLoading(false); })
+      .then(res => { 
+        setData(res); 
+        setLoading(false); 
+        
+        // Extract unique departments
+        const allProbes = [...(res.buildings?.lan || []), ...(res.buildings?.wlan || [])];
+        const depts = Array.from(new Set(allProbes.map(p => p.department || 'Undefined')));
+        setDepartments(['All', ...depts.sort()]);
+      })
       .catch(err => setLoading(false));
   }, []);
 
@@ -24,7 +34,19 @@ const NetworkStatus = ({ user }) => {
 
   if (loading) return <div className="p-10 text-center text-teal-600 font-medium animate-pulse">Scanning Network...</div>;
 
-  const buildings = data?.buildings || { lan: [], wlan: [] };
+  let buildings = data?.buildings || { lan: [], wlan: [] };
+
+  // Filter by Department
+  if (selectedDept !== 'All') {
+    buildings = {
+      lan: buildings.lan.filter(p => (p.department || 'Undefined') === selectedDept),
+      wlan: buildings.wlan.filter(p => (p.department || 'Undefined') === selectedDept)
+    };
+  }
+
+  // Sort Alphabetically by Name
+  buildings.lan.sort((a, b) => a.name.localeCompare(b.name));
+  buildings.wlan.sort((a, b) => a.name.localeCompare(b.name));
 
   const StatusCard = ({ item }) => {
     const isClickable = user?.role === 'admin';
@@ -41,7 +63,7 @@ const NetworkStatus = ({ user }) => {
             <span className={`font-bold block text-lg ${isClickable ? 'text-slate-700 group-hover:text-teal-700' : 'text-slate-600'}`}>
               {item.name}
             </span>
-            <span className="text-xs text-gray-400 font-medium">{item.type}</span>
+            <span className="text-xs text-gray-400 font-medium">{item.department || 'Undefined'} • {item.type}</span>
           </div>
           
           <div className="flex flex-col items-end gap-1">
@@ -104,6 +126,24 @@ const NetworkStatus = ({ user }) => {
         )}
       </div>
 
+      {/* Department Filter */}
+      <div className="max-w-6xl mx-auto mb-6 flex justify-end">
+        <div className="relative inline-block">
+          <select 
+            value={selectedDept} 
+            onChange={(e) => setSelectedDept(e.target.value)}
+            className="appearance-none bg-white border border-teal-200 text-teal-800 py-2 pl-4 pr-10 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer font-medium text-sm"
+          >
+            {departments.map(dept => (
+              <option key={dept} value={dept}>{dept}</option>
+            ))}
+          </select>
+          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-teal-600">
+            <Filter size={16} />
+          </div>
+        </div>
+      </div>
+
       <div className={`max-w-6xl mx-auto border-2 rounded-2xl p-6 flex items-center justify-between mb-12 shadow-sm bg-white
         ${data?.overall === 'Operational' ? 'border-emerald-400' : 'border-red-400'}`}>
         <div>
@@ -124,8 +164,8 @@ const NetworkStatus = ({ user }) => {
           <h3 className="text-lg font-bold text-teal-800 mb-4 flex items-center gap-2">
             <span className="p-1.5 bg-teal-100 rounded-lg text-teal-600">🌐</span> Ethernet (LAN)
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-1">
-            {buildings.lan.length === 0 && <div className="col-span-2 text-gray-400 italic text-center py-4">No active LAN monitors found.</div>}
+          <div className="grid grid-cols-1 gap-4">
+            {buildings.lan.length === 0 && <div className="text-gray-400 italic text-center py-4">No active LAN monitors found.</div>}
             {buildings.lan.map((place) => (
               <StatusCard key={place.id + 'lan'} item={place} />
             ))}
@@ -137,8 +177,8 @@ const NetworkStatus = ({ user }) => {
           <h3 className="text-lg font-bold text-teal-800 mb-4 flex items-center gap-2">
             <span className="p-1.5 bg-purple-100 rounded-lg text-purple-600">📶</span> Wi-Fi (WLAN)
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-1">
-            {buildings.wlan.length === 0 && <div className="col-span-2 text-gray-400 italic text-center py-4">No active Wi-Fi monitors found.</div>}
+          <div className="grid grid-cols-1 gap-4">
+            {buildings.wlan.length === 0 && <div className="text-gray-400 italic text-center py-4">No active Wi-Fi monitors found.</div>}
             {buildings.wlan.map((place) => (
               <StatusCard key={place.id + 'wlan'} item={place} />
             ))}
