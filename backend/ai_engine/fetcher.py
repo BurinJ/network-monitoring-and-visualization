@@ -167,28 +167,22 @@ def get_all_labels(metric_name, hostname):
 # --- HELPER: Fetch Range Data (History) ---
 def get_metric_history(query, hours=24, step='1h'):
     if not CONNECTED: 
-        # Generate Mock History
         now = datetime.datetime.now()
         data = []
         for i in range(hours):
             t = now - datetime.timedelta(hours=hours-i)
-            # Create a fake sine wave + noise pattern
-            val = 25 + (math.sin(i) * 10) + random.randint(-5, 5) # Default ping-like values
+            val = 25 + (math.sin(i) * 10) + random.randint(-5, 5) 
             if "SPEEDTEST" in query:
                  val = 400 + (math.sin(i) * 100) + random.randint(-50, 50)
+            elif "INTERNAL" in query and "PING" in query:
+                 val = 2 + random.random()
             data.append([t.timestamp(), max(0, val)])
         return data
 
     try:
         start_time = datetime.datetime.now() - datetime.timedelta(hours=hours)
         end_time = datetime.datetime.now()
-        
-        result = prom.custom_query_range(
-            query=query,
-            start_time=start_time,
-            end_time=end_time,
-            step=step
-        )
+        result = prom.custom_query_range(query=query, start_time=start_time, end_time=end_time, step=step)
         if result and len(result) > 0:
             return [[float(x[0]), float(x[1])] for x in result[0]['values']]
     except Exception as e:
@@ -197,7 +191,6 @@ def get_metric_history(query, hours=24, step='1h'):
 
 # --- HELPER: Bulk Fetch Latest Values for Map ---
 def get_metric_map(query):
-    """Fetches a metric for all hosts and returns a dict {hostname: value}"""
     mapping = {}
     if not CONNECTED: return mapping
     try:
@@ -205,28 +198,20 @@ def get_metric_map(query):
         for item in results:
             host = item['metric'].get('hostname')
             if host:
-                try:
-                    mapping[host] = float(item['value'][1])
+                try: mapping[host] = float(item['value'][1])
                 except: pass
-    except Exception as e:
-        print(f"Bulk Fetch Error ({query}): {e}")
+    except: pass
     return mapping
 
-# --- ALERT CACHE (Prevent Spamming DB) ---
-# Format: { "probe_id_error_type": timestamp_last_logged }
+# --- ALERT CACHE ---
 ALERT_COOLDOWN = {} 
 
 def check_and_log(probe_id, level, category, message, details):
-    """
-    Logs an alert only if it hasn't been logged in the last 15 minutes.
-    """
     key = f"{probe_id}_{category}"
     now = time.time()
     last_time = ALERT_COOLDOWN.get(key, 0)
-    
-    # 15 minutes cooldown = 900 seconds
     if (now - last_time) > 900:
-        history.log_alert(probe_id, level, category, message, details)
+        if history: history.log_alert(probe_id, level, category, message, details)
         ALERT_COOLDOWN[key] = now
         
 # --- PAGE 1: NETWORK STATUS LOGIC ---
@@ -609,70 +594,82 @@ def fetch_inspector_data(probe_id, duration='24h'):
 
 # --- INDIVIDUAL PROBE FORECASTING LOGIC ---
 def fetch_probe_forecast(probe_id):
-    """
-    Fetches the 24h history for a specific probe (LAN Download)
-    and generates a personalized forecast.
-    """
     clean_id = probe_id.replace(" (LAN)", "").replace(" (WLAN)", "")
     raw_hostname = next((k for k, v in HOSTNAME_MAPPING.items() if v == clean_id), clean_id)
-
-    # 1. Fetch History (LAN Download as proxy for load)
-    # Using 24h of history
-    raw_history = get_metric_history(f'LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}', hours=24, step='1h')
     
-    # 2. Normalize History (AI expects 0-1)
-    # Calculate baseline max for this specific probe from its history
-    vals = [x[1] for x in raw_history] if raw_history else []
-    probe_max = max(vals) if vals else 1000
-    
-    norm_history = [v/probe_max for v in vals] if vals else []
-
-    # 3. Generate Forecast
-    forecast = predict_future_traffic(norm_history)
-
-    # 4. Denormalize Forecast (Scale back to Mbps)
-    # The AI returns 0-100%, we map this back to Mbps relative to the probe's max
-    if forecast:
-        for point in forecast:
-            # AI returns int 0-100, so we convert to float 0.0-1.0 then multiply by max
-            point['rf_value'] = round((point['rf_load'] / 100.0) * probe_max)
-            point['lstm_value'] = round((point['lstm_load'] / 100.0) * probe_max)
-
-    # If empty (AI failure), fallback
-    if not forecast:
-        now = datetime.datetime.now()
-        for i in range(24):
-            forecast.append({
-                "time": (now + datetime.timedelta(hours=i)).strftime("%H:00"),
-                "rf_load": 50, "lstm_load": 50,
-                "rf_value": int(probe_max * 0.5), "lstm_value": int(probe_max * 0.5)
-            })
-
-    return {
-        "probe_name": clean_id,
-        "history": raw_history, # Timestamped actuals
-        "forecast": forecast    # Future predictions
+    metrics_to_forecast = {
+        "lan_ext_down": f'LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
+        "lan_ext_up": f'LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
+        "lan_int_down": f'LAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
+        "lan_int_up": f'LAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
+        "lan_ping_ext": f'LAN_PING{{hostname="{raw_hostname}", type="EXTERNAL", metrics="avgRTT"}}',
+        "lan_ping_int": f'LAN_PING{{hostname="{raw_hostname}", type="INTERNAL", metrics="avgRTT"}}',
+        "wlan_ext_down": f'WLAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
+        "wlan_ext_up": f'WLAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
+        "wlan_int_down": f'WLAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
+        "wlan_int_up": f'WLAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
+        "wlan_ping_ext": f'WLAN_PING{{hostname="{raw_hostname}", type="EXTERNAL", metrics="avgRTT"}}',
+        "wlan_ping_int": f'WLAN_PING{{hostname="{raw_hostname}", type="INTERNAL", metrics="avgRTT"}}',
     }
 
-# --- PAGE 4: TRENDS LOGIC ---
+    all_forecasts = {}
+
+    for metric_key, query in metrics_to_forecast.items():
+        raw_history = get_metric_history(query, hours=24, step='1h')
+        vals = [x[1] for x in raw_history] if raw_history else []
+        
+        series_max = max(vals) if vals and max(vals) > 0 else 1.0
+        norm_history = [v/series_max for v in vals] if vals else []
+
+        # DETERMINE CONTEXT
+        is_wlan = "wlan" in metric_key
+        is_ping = "ping" in metric_key
+
+        # CALL PREDICT WITH CONTEXT
+        norm_forecast = predict_future_traffic(norm_history, is_wlan=is_wlan, is_ping=is_ping)
+
+        denorm_forecast = []
+        if norm_forecast:
+            for point in norm_forecast:
+                # Add extra volatility noise for WLAN/Ping if using fallback
+                # But LSTM should now handle this natively. 
+                # We can keep a small random factor for visual realism if desired.
+                rf_val = (point['rf_load'] / 100.0) * series_max
+                lstm_val = (point['lstm_load'] / 100.0) * series_max 
+
+                denorm_forecast.append({
+                    "time": point['time'],
+                    "rf_value": round(max(0, rf_val), 1),
+                    "lstm_value": round(max(0, lstm_val), 1)
+                })
+        else:
+            now = datetime.datetime.now()
+            start_time = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            for i in range(24):
+                denorm_forecast.append({
+                    "time": (start_time + datetime.timedelta(hours=i)).strftime("%H:00"),
+                    "rf_value": 0, "lstm_value": 0
+                })
+
+        all_forecasts[metric_key] = {
+            "history": raw_history,
+            "forecast": denorm_forecast,
+            "max": series_max 
+        }
+
+    return { 
+        "probe_name": clean_id, 
+        "data": all_forecasts 
+    }
+
 def fetch_trends_data():
     data = fetch_network_status()
     probes = data.get('wlan', [])
-    
-    # 1. Fetch Aggregate History for LSTM context (Last 24h)
-    # We use LAN download as the main indicator for total network load
     raw_history = get_metric_history('avg(LAN_EXTERNAL_SPEEDTEST{type="Download"})', hours=24, step='1h')
-    
-    # 2. Normalize History (0-1) for LSTM
-    # We need a global baseline. Let's assume 1000Mbps is the max backbone speed for aggregation.
     norm_history = []
     if raw_history:
         norm_history = [val[1] / 1000.0 for val in raw_history]
-        
-    # 3. Get Forecasts
     forecast = predict_future_traffic(norm_history)
-    
-    # 4. Fallback if empty
     if not forecast:
         now = datetime.datetime.now()
         for i in range(24):
@@ -681,7 +678,6 @@ def fetch_trends_data():
                 "rf_load": random.randint(40, 90),
                 "lstm_load": random.randint(30, 80)
             })
-            
     return {"heatmap": probes, "forecast": forecast}
 
 # --- MOCK DATA ---
