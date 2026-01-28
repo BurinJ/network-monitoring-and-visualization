@@ -29,9 +29,14 @@ except ImportError:
 
 BASE_DIR = os.path.dirname(__file__)
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
+
+# Paths
 ANOMALY_MODEL_PATH = os.path.join(MODEL_DIR, 'anomaly_model.pkl')
-FORECAST_MODEL_PATH = os.path.join(MODEL_DIR, 'forecast_model.pkl')
-LSTM_MODEL_PATH = os.path.join(MODEL_DIR, 'lstm_forecast_model.pth')
+# Specific Global Trend Models
+RF_LAN_PATH = os.path.join(MODEL_DIR, 'rf_lan.pkl')
+RF_WLAN_PATH = os.path.join(MODEL_DIR, 'rf_wlan.pkl')
+LSTM_LAN_PATH = os.path.join(MODEL_DIR, 'lstm_lan.pth')
+LSTM_WLAN_PATH = os.path.join(MODEL_DIR, 'lstm_wlan.pth')
 
 def ensure_directory():
     if not os.path.exists(MODEL_DIR):
@@ -69,8 +74,6 @@ def fetch_real_data(days=14):
         df_wlan_up = get_df_with_host('avg_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])', 'wlan_up')
         df_lan_ping = get_df_with_host('avg_over_time(LAN_PING{metrics="avgRTT", type="EXTERNAL"}[1h])', 'lan_ping')
 
-        # Merge
-        print("   ...Processing and merging data frames...")
         dfs = [df_lan_down, df_lan_up, df_wlan_down, df_wlan_up, df_lan_ping]
         df = dfs[0]
         for d in dfs[1:]:
@@ -103,7 +106,7 @@ def fetch_real_data(days=14):
 
         df_normalized = df.apply(normalize, axis=1)
         
-        # Time Features (Still needed for RF)
+        # Time Features
         df_normalized['hour'] = df_normalized['timestamp'].dt.hour
         df_normalized['day_of_week'] = df_normalized['timestamp'].dt.dayofweek
         df_normalized['is_weekend'] = df_normalized['day_of_week'].isin([5, 6]).astype(int)
@@ -125,8 +128,6 @@ def generate_enhanced_synthetic_data(n_samples=5000):
     start = datetime.datetime.now() - datetime.timedelta(hours=n_samples)
     timestamps = [start + datetime.timedelta(hours=i) for i in range(n_samples)]
     df = pd.DataFrame({'timestamp': timestamps})
-    
-    # Time features
     df['hour'] = df['timestamp'].dt.hour
     df['day_of_week'] = df['timestamp'].dt.dayofweek
     df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
@@ -144,11 +145,10 @@ def generate_enhanced_synthetic_data(n_samples=5000):
     baselines = {"default": {"lan_down_max": 1000}}
     return df, baselines
 
-# --- LSTM UNIVERSAL MODEL (3 Inputs) ---
+# --- SIMPLE UNIVERSAL LSTM ---
 if PYTORCH_AVAILABLE:
     class LSTMUniversal(nn.Module):
-        # Input: [Value, Is_WLAN, Is_Ping] = 3 features
-        def __init__(self, input_size=3, hidden_size=64, num_layers=2, output_size=1):
+        def __init__(self, input_size=1, hidden_size=64, num_layers=2, output_size=1):
             super(LSTMUniversal, self).__init__()
             self.hidden_size = hidden_size
             self.num_layers = num_layers
@@ -162,43 +162,32 @@ if PYTORCH_AVAILABLE:
             out = self.fc(out[:, -1, :])
             return out
 
-    def train_lstm_model(df, seq_length=24, epochs=100, batch_size=64):
-        print("\n🧠 Training Universal LSTM Model...")
-        dataset_list = []
-        metric_cols = [
-            ('lan_down', 0, 0), ('lan_up', 0, 0),
-            ('wlan_down', 1, 0), ('lan_ping', 0, 1) 
-        ]
+    def train_lstm_model(df, col_name, save_path, seq_length=24, epochs=50):
+        print(f"\n🧠 Training LSTM Model for {col_name}...")
         
-        for col, is_wlan, is_ping in metric_cols:
-            if col not in df.columns: continue
-            sub_df = pd.DataFrame()
-            sub_df['val'] = df[col]
-            
-            max_val = sub_df['val'].max()
-            if max_val > 0: sub_df['val'] = sub_df['val'] / max_val
-            
-            sub_df['is_wlan'] = is_wlan
-            sub_df['is_ping'] = is_ping
-            dataset_list.append(sub_df.values)
+        # Extract specific column for this model
+        if col_name not in df.columns:
+            print(f"⚠️ Column {col_name} not found. Skipping.")
+            return
 
-        if not dataset_list: return
-        full_data = np.vstack(dataset_list).astype(np.float32)
+        data = df[col_name].values.astype(np.float32).reshape(-1, 1) # [N, 1]
         
         xs, ys = [], []
-        for i in range(len(full_data) - seq_length):
-            x = full_data[i:(i + seq_length)]
-            y = full_data[i + seq_length, 0] 
+        for i in range(len(data) - seq_length):
+            x = data[i:(i + seq_length)]
+            y = data[i + seq_length]
             xs.append(x)
             ys.append(y)
         
+        if not xs: return
+
         X_tensor = torch.from_numpy(np.array(xs))
-        y_tensor = torch.from_numpy(np.array(ys).reshape(-1, 1))
+        y_tensor = torch.from_numpy(np.array(ys))
         
         dataset = TensorDataset(X_tensor, y_tensor)
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        loader = DataLoader(dataset, batch_size=32, shuffle=True)
         
-        model = LSTMUniversal(input_size=3, output_size=1)
+        model = LSTMUniversal(input_size=1, output_size=1)
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         
@@ -213,51 +202,46 @@ if PYTORCH_AVAILABLE:
                 optimizer.step()
                 epoch_loss += loss.item()
             
-            if 1 or (epoch + 1) % 20 == 0:
-                print(f"   [Epoch {epoch+1}/{epochs}] Loss: {epoch_loss / len(loader):.5f}")
+            print(f"   [Epoch {epoch+1}/{epochs}] Loss: {epoch_loss/len(loader):.5f}")
         
-        torch.save(model.state_dict(), LSTM_MODEL_PATH)
-        print(f"✅ LSTM Model saved.")
+        torch.save(model.state_dict(), save_path)
+        print(f"✅ LSTM Model saved to: {save_path}")
 
 def train_models():
     ensure_directory()
-    print("=== 🚀 Starting AI Training Pipeline ===")
-    
     df, baselines = fetch_real_data()
-    if df.empty: 
-        print("❌ No data available.")
-        return
+    if df.empty: return
 
-    # 1. Anomaly (Reduced Features)
+    # 1. Anomaly
     print("\n🧠 Training Anomaly Detection...")
-    anomaly_cols = ['lan_down', 'lan_up', 'wlan_down', 'wlan_up', 'lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']
-    for c in anomaly_cols: 
-        if c not in df.columns: df[c] = 0
-            
-    anomaly_model = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
-    anomaly_model.fit(df[anomaly_cols])
+    anomaly_cols = ['hour', 'is_weekend', 'lan_down', 'lan_up', 'wlan_down', 'wlan_up', 'lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']
+    model = IsolationForest(n_estimators=200, contamination=0.01, random_state=42)
+    model.fit(df[anomaly_cols])
     
     stats = df[anomaly_cols].describe().loc[['mean', 'std']].to_dict()
-    joblib.dump({'model': anomaly_model, 'baselines': baselines, 'features': anomaly_cols, 'stats': stats}, ANOMALY_MODEL_PATH)
+    joblib.dump({'model': model, 'baselines': baselines, 'features': anomaly_cols, 'stats': stats}, ANOMALY_MODEL_PATH)
     print(f"✅ Anomaly Model saved.")
 
-    # 2. Random Forest (Restored for Comparison)
-    print("\n🔮 Training Forecast (RF - Baseline)...")
-    # RF trains on Time Features -> LAN Download (as a general load indicator)
+    # 2. Forecast (RF) - Train Separate Models for LAN and WLAN
+    print("\n🔮 Training Forecast (RF)...")
     X = df[['hour', 'day_of_week', 'is_weekend']]
-    y = df['lan_down']
     
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-    rf_model.fit(X, y)
-    
-    joblib.dump(rf_model, FORECAST_MODEL_PATH)
-    print(f"✅ RF Model saved.")
+    # RF LAN
+    rf_lan = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_lan.fit(X, df['lan_down'])
+    joblib.dump(rf_lan, RF_LAN_PATH)
+    print(f"✅ RF LAN Model saved.")
 
-    # 3. LSTM
+    # RF WLAN
+    rf_wlan = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_wlan.fit(X, df['wlan_down'])
+    joblib.dump(rf_wlan, RF_WLAN_PATH)
+    print(f"✅ RF WLAN Model saved.")
+
+    # 3. LSTM - Train Separate Models
     if PYTORCH_AVAILABLE:
-        train_lstm_model(df)
-        
-    print("\n=== ✨ Training Complete ===")
+        train_lstm_model(df, 'lan_down', LSTM_LAN_PATH)
+        train_lstm_model(df, 'wlan_down', LSTM_WLAN_PATH)
 
 if __name__ == "__main__":
     train_models()

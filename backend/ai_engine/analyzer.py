@@ -26,7 +26,7 @@ DEPARTMENTS = {}
 
 if PYTORCH_AVAILABLE:
     class LSTMUniversal(nn.Module):
-        def __init__(self, input_size=3, hidden_size=64, num_layers=2, output_size=1):
+        def __init__(self, input_size=1, hidden_size=64, num_layers=2, output_size=1):
             super(LSTMUniversal, self).__init__()
             self.hidden_size = hidden_size
             self.num_layers = num_layers
@@ -43,7 +43,6 @@ if PYTORCH_AVAILABLE:
 def load_models():
     global ANOMALY_MODEL, FORECAST_MODEL, LSTM_MODEL, STATS, BASELINES, FEATURES, DEPARTMENTS
     try:
-        # Load Anomaly
         if os.path.exists(ANOMALY_PATH):
             data = joblib.load(ANOMALY_PATH)
             if isinstance(data, dict):
@@ -53,21 +52,18 @@ def load_models():
                 BASELINES = data.get('baselines', {})
                 DEPARTMENTS = data.get('departments', {})
             else: ANOMALY_MODEL = data
-
-        # Load Forecast (Restored)
+        
         if os.path.exists(FORECAST_PATH):
             FORECAST_MODEL = joblib.load(FORECAST_PATH)
-            print("✅ Random Forest Model loaded.")
 
-        # Load LSTM
         if PYTORCH_AVAILABLE and os.path.exists(LSTM_PATH):
-            model = LSTMUniversal(input_size=3, output_size=1)
+            model = LSTMUniversal(input_size=1, output_size=1)
             try:
                 model.load_state_dict(torch.load(LSTM_PATH, map_location=torch.device('cpu')))
                 model.eval()
                 LSTM_MODEL = model
                 print("✅ Universal LSTM Model loaded.")
-            except Exception as e: print(f"❌ LSTM Load Error: {e}")
+            except: pass
 
     except Exception as e:
         print(f"❌ Error loading models: {e}")
@@ -86,10 +82,10 @@ def detect_anomaly(metrics, probe_id="default"):
     norm_wlan_down = safe_div(metrics.get('wlan_down', 0), baseline.get('wlan_down_max', 1))
     norm_wlan_up = safe_div(metrics.get('wlan_up', 0), baseline.get('wlan_up_max', 1))
 
-    # NO TIME FEATURES for Anomaly
+    now = datetime.datetime.now()
     input_data = {
-        'lan_down': norm_lan_down, 'lan_up': norm_lan_up,
-        'wlan_down': norm_wlan_down, 'wlan_up': norm_wlan_up,
+        'hour': now.hour, 'is_weekend': 1 if now.weekday() >= 5 else 0,
+        'lan_down': norm_lan_down, 'lan_up': norm_lan_up, 'wlan_down': norm_wlan_down, 'wlan_up': norm_wlan_up,
         'lan_ping': metrics.get('lan_ping', 0), 'wlan_ping': metrics.get('wlan_ping', 0),
         'lan_dns': metrics.get('lan_dns', 0), 'wlan_dns': metrics.get('wlan_dns', 0),
     }
@@ -103,76 +99,61 @@ def detect_anomaly(metrics, probe_id="default"):
         prediction = ANOMALY_MODEL.predict(features)[0]
         score = ANOMALY_MODEL.decision_function(features)[0] 
         if prediction == -1:
-            desc = "Traffic deviation"
-            if norm_wlan_down < 0.05: desc = "Abnormal speed drop"
-            elif input_data['lan_dns'] > 100: desc = "Latency anomaly"
-            return {"is_anomaly": True, "score": round(float(score), 4), "desc": desc, "department": department}
+            return {"is_anomaly": True, "score": round(float(score), 4), "desc": "Traffic deviation", "department": department}
         return {"is_anomaly": False, "score": round(float(score), 4), "desc": "Normal", "department": department}
     except: return {"is_anomaly": False, "score": 0, "desc": "Error", "department": "Unknown"}
 
-def predict_future_traffic(recent_history=None, is_wlan=False, is_ping=False):
+def predict_future_traffic(recent_history=None):
+    """
+    Generates 24-hour forecasts.
+    recent_history: List of normalized load values [0.0 - 1.0] (1D Array)
+    """
     forecasts = []
     now = datetime.datetime.now()
     start_time = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     
-    # 1. Random Forest (Restored)
+    # 1. Random Forest (Time-based)
     rf_preds = []
     if FORECAST_MODEL:
         future_data = []
         for i in range(24):
-            future_time = start_time + datetime.timedelta(hours=i)
-            future_data.append({
-                'hour': future_time.hour,
-                'day_of_week': future_time.weekday(),
-                'is_weekend': 1 if future_time.weekday() >= 5 else 0
-            })
+            t = start_time + datetime.timedelta(hours=i)
+            future_data.append({'hour': t.hour, 'day_of_week': t.weekday(), 'is_weekend': 1 if t.weekday()>=5 else 0})
         try:
-            # Predict
             rf_raw = FORECAST_MODEL.predict(pd.DataFrame(future_data))
-            # Normalize 0-100%
-            rf_preds = [max(0, min(100, int(val * 100))) for val in rf_raw]
-        except: 
-            rf_preds = [50] * 24
+            rf_preds = [max(0, min(1.0, val)) for val in rf_raw]
+        except: pass
 
-    # 2. LSTM Prediction
+    # 2. LSTM (Sequence)
     lstm_preds = []
     seq_len = 24
-    
     if LSTM_MODEL and recent_history and len(recent_history) >= seq_len:
         try:
             history_vals = recent_history[-seq_len:]
-            sequence_inputs = []
-            
-            flag_wlan = 1.0 if is_wlan else 0.0
-            flag_ping = 1.0 if is_ping else 0.0
-            
-            for val in history_vals:
-                sequence_inputs.append([val, flag_wlan, flag_ping])
-
-            curr_seq = torch.tensor(sequence_inputs, dtype=torch.float32).view(1, seq_len, 3)
+            # Reshape [24] -> [1, 24, 1]
+            curr_seq = torch.tensor(history_vals, dtype=torch.float32).view(1, seq_len, 1)
             
             with torch.no_grad():
                 for _ in range(24):
                     pred = LSTM_MODEL(curr_seq)
                     val = max(0.0, min(1.5, pred.item()))
-                    lstm_preds.append(int(val * 100))
+                    lstm_preds.append(val)
                     
-                    new_pt = torch.tensor([[[val, flag_wlan, flag_ping]]], dtype=torch.float32)
+                    new_pt = torch.tensor([[[val]]], dtype=torch.float32)
                     curr_seq = torch.cat((curr_seq[:, 1:, :], new_pt), dim=1)
-        except Exception as e:
-            print(f"LSTM Error: {e}")
+        except Exception as e: print(e)
 
     # 3. Combine
     for i in range(24):
         time_label = (start_time + datetime.timedelta(hours=i)).strftime("%H:00")
         
-        rf_val = rf_preds[i] if i < len(rf_preds) else 50
+        rf_val = rf_preds[i] if i < len(rf_preds) else 0.5
         lstm_val = lstm_preds[i] if i < len(lstm_preds) else rf_val
         
         forecasts.append({
             "time": time_label,
-            "rf_load": rf_val,
-            "lstm_load": lstm_val
+            "rf_load": int(rf_val * 100),
+            "lstm_load": int(lstm_val * 100)
         })
             
     return forecasts

@@ -1,6 +1,6 @@
 {
-  "lan_ping_threshold": 10.0,
-  "wlan_ping_threshold": 20.0,
+  "lan_ping_threshold": 100.0,
+  "wlan_ping_threshold": 200.0,
   "dns_threshold": 100.0,
   "offline_timeout_mins": 60.0,
   "speed_drop_threshold": 10.0

@@ -38,7 +38,7 @@ except ImportError:
 try:
     from .analyzer import detect_anomaly, predict_future_traffic
 except ImportError:
-    def detect_anomaly(m): return {"is_anomaly": False, "score": 0, "desc": "AI Module Missing"}
+    print(" !!! Can not get anomaly detection and prediction !!! ")
 
 # --- IMPORT CONFIGURATION & HISTORY ---
 try:
@@ -218,7 +218,6 @@ def check_and_log(probe_id, level, category, message, details):
 def fetch_network_status():
     if not CONNECTED: return _mock_pulse_data()
     
-    # LOAD DYNAMIC SETTINGS
     config = settings_manager.get_settings()
     LAN_PING_THRESH = config.get('lan_ping_threshold', 100)
     WLAN_PING_THRESH = config.get('wlan_ping_threshold', 200)
@@ -236,7 +235,6 @@ def fetch_network_status():
                     except: pass
     except Exception: pass
 
-    # Bulk Fetches
     lan_down_map = get_metric_map('last_over_time(LAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])')
     lan_up_map = get_metric_map('last_over_time(LAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])')
     wlan_down_map = get_metric_map('last_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])')
@@ -256,14 +254,12 @@ def fetch_network_status():
         for item in results:
             raw_hostname = item['metric'].get('hostname', 'Unknown Device')
             display_name = HOSTNAME_MAPPING.get(raw_hostname, raw_hostname)
-            # Fetch Department from Global Mapping
             department = DEPARTMENT_MAPPING.get(raw_hostname, "Undefined")
             metric_labels = item['metric']
             
             probe_ts = timestamp_map.get(raw_hostname, 0)
             is_stale = False
             stale_label = "Offline"
-
             if probe_ts > 0:
                 diff = current_time - probe_ts
                 if diff > TIMEOUT_SEC:
@@ -271,135 +267,79 @@ def fetch_network_status():
                     days = int(diff // 86400)
                     hours = int((diff % 86400) // 3600)
                     minutes = int((diff % 3600) // 60)
-                    stale_label = f"Offline (~{days}d {hours}h {minutes}m)"
+                    stale_label = f"Offline (~{' '.join([f'{days}d' if days else '', f'{hours}h' if hours else '', f'{minutes}m']).strip()})"
 
             error_label = metric_labels.get('error', 'None')
             lan_curl_err = metric_labels.get('lan_google_curl', 'True') == 'False'
             wlan_curl_err = metric_labels.get('wlan_google_curl', 'True') == 'False'
 
-            # LAN
+            # 1. GATHER ALL METRICS FIRST
             try: lan_dns = float(metric_labels.get('lan_dns_response_time', '0'))
             except: lan_dns = 0.0
-            
             lan_down = lan_down_map.get(raw_hostname, 0)
             lan_up = lan_up_map.get(raw_hostname, 0)
             lan_latency = lan_ping_map.get(raw_hostname, 0)
 
-            lan_status = "Active"
-            lan_color = "green"
-            if is_stale:
-                lan_status = stale_label
-                lan_color = "red"
-            elif error_label == "CURL-ERR" and lan_curl_err:
-                lan_status = "Curl Error"
-                lan_color = "red"
-            elif lan_latency == 0 or lan_latency > 2000:
-                lan_status = "Down"
-                lan_color = "red"
-            elif lan_dns > 500:
-                lan_status = "DNS Failure"
-                lan_color = "red"
-            elif lan_dns > DNS_THRESH: # Dynamic
-                lan_status = "Slow DNS"
-                lan_color = "orange"
-            elif lan_latency > LAN_PING_THRESH: # Dynamic
-                lan_status = "Laggy"
-                lan_color = "orange"
-            
-            # AI Check
-            if lan_color == "green":
-                ai_res = detect_anomaly({
-                    'lan_ping': lan_latency, 'lan_dns': lan_dns, 
-                    'lan_down': lan_down, 'lan_up': lan_up,
-                }, probe_id=raw_hostname)
-                if ai_res['is_anomaly']:
-                    lan_status = "AI Warning"
-                    lan_color = "orange"
-                    check_and_log(display_name, "Warning", "AI Anomaly", ai_res['desc'], {"interface": "LAN"})
-
-            if lan_color == 'red':
-                check_and_log(display_name, "Critical", "Connection Failure", lan_status, {"interface": "LAN"})
-
-            lan_probes.append({
-                "name": display_name,
-                "id": raw_hostname,
-                "department": department,
-                "type": "LAN",
-                "status": lan_status,
-                "color": lan_color,
-                "latency": round(lan_latency, 2), 
-                "dns": round(lan_dns, 2),
-                "down": round(lan_down, 1),
-                "up": round(lan_up, 1),
-                "lat": float(metric_labels.get('latitude', '0')),
-                "lng": float(metric_labels.get('longitude', '0'))
-            })
-
-            # WLAN
             try: wlan_dns = float(metric_labels.get('wlan_dns_response_time', '0'))
             except: wlan_dns = 0.0
-
             wlan_down = wlan_down_map.get(raw_hostname, 0)
             wlan_up = wlan_up_map.get(raw_hostname, 0)
             wlan_latency = wlan_ping_map.get(raw_hostname, 0)
 
-            wlan_status = "Active"
-            wlan_color = "green"
-            if is_stale:
-                wlan_status = stale_label
-                wlan_color = "red"
-            elif error_label == "CURL&DNS&WLAN-ERR":
-                wlan_status = "WLAN Error"
-                wlan_color = "red"
-            elif error_label == "CURL-ERR" and wlan_curl_err:
-                wlan_status = "Curl Error"
-                wlan_color = "red"
-            elif wlan_latency == 0 or wlan_latency > 2000:
-                wlan_status = "Down"
-                wlan_color = "red"
-            elif wlan_dns > 500:
-                wlan_status = "DNS Failure"
-                wlan_color = "red"
-            elif wlan_dns > DNS_THRESH: # Dynamic
-                wlan_status = "Slow DNS"
-                wlan_color = "orange"
-            elif wlan_latency > WLAN_PING_THRESH: # Dynamic
-                wlan_status = "Laggy"
-                wlan_color = "orange"
+            # 2. RUN AI CHECK ONCE WITH FULL CONTEXT
+            ai_res = detect_anomaly({
+                'lan_ping': lan_latency, 'lan_dns': lan_dns, 
+                'lan_down': lan_down, 'lan_up': lan_up,
+                'wlan_ping': wlan_latency, 'wlan_dns': wlan_dns,
+                'wlan_down': wlan_down, 'wlan_up': wlan_up
+            }, probe_id=raw_hostname)
 
-            if wlan_color == "green":
-                ai_res = detect_anomaly({
-                    'wlan_ping': wlan_latency, 'wlan_dns': wlan_dns,
-                    'wlan_down': wlan_down, 'wlan_up': wlan_up
-                }, probe_id=raw_hostname)
-                if ai_res['is_anomaly']:
-                    wlan_status = "AI Warning"
-                    wlan_color = "orange"
-                    check_and_log(display_name, "Warning", "AI Anomaly", ai_res['desc'], {"interface": "WLAN"})
+            # 3. APPLY STATUS FOR LAN
+            lan_status, lan_color = "Active", "green"
+            if is_stale: lan_status, lan_color = stale_label, "red"
+            elif error_label == "CURL-ERR" and lan_curl_err: lan_status, lan_color = "Curl Error", "red"
+            elif lan_latency == 0 or lan_latency > 2000: lan_status, lan_color = "Down", "red"
+            elif lan_dns > 500: lan_status, lan_color = "DNS Failure", "red"
+            elif lan_dns > DNS_THRESH: lan_status, lan_color = "Slow DNS", "orange"
+            elif lan_latency > LAN_PING_THRESH: lan_status, lan_color = "Laggy", "orange"
+            elif ai_res['is_anomaly']: # Use shared AI result
+                lan_status, lan_color = "AI Warning", "orange"
+                check_and_log(display_name, "Warning", "AI Anomaly", ai_res['desc'], {"interface": "LAN"})
 
-            if wlan_color == 'red':
-                check_and_log(display_name, "Critical", "Connection Failure", wlan_status, {"interface": "WLAN"})
+            if lan_color == 'red': check_and_log(display_name, "Critical", "Connection Failure", lan_status, {"interface": "LAN"})
+
+            lan_probes.append({
+                "name": display_name, "id": raw_hostname, "department": department, "type": "LAN", "status": lan_status, "color": lan_color,
+                "latency": round(lan_latency, 2), "dns": round(lan_dns, 2), "down": round(lan_down, 1), "up": round(lan_up, 1),
+                "lat": float(metric_labels.get('latitude', '0')), "lng": float(metric_labels.get('longitude', '0'))
+            })
+
+            # 4. APPLY STATUS FOR WLAN
+            wlan_status, wlan_color = "Active", "green"
+            if is_stale: wlan_status, wlan_color = stale_label, "red"
+            elif error_label == "CURL&DNS&WLAN-ERR": wlan_status, wlan_color = "WLAN Error", "red"
+            elif error_label == "CURL-ERR" and wlan_curl_err: wlan_status, wlan_color = "Curl Error", "red"
+            elif wlan_latency == 0 or wlan_latency > 2000: wlan_status, wlan_color = "Down", "red"
+            elif wlan_dns > 500: wlan_status, wlan_color = "DNS Failure", "red"
+            elif wlan_dns > DNS_THRESH: wlan_status, wlan_color = "Slow DNS", "orange"
+            elif wlan_latency > WLAN_PING_THRESH: wlan_status, wlan_color = "Laggy", "orange"
+            elif ai_res['is_anomaly']: # Use shared AI result
+                wlan_status, wlan_color = "AI Warning", "orange"
+                check_and_log(display_name, "Warning", "AI Anomaly", ai_res['desc'], {"interface": "WLAN"})
+
+            if wlan_color == 'red': check_and_log(display_name, "Critical", "Connection Failure", wlan_status, {"interface": "WLAN"})
 
             wlan_probes.append({
-                "name": display_name,
-                "id": raw_hostname,
-                "department": department,
-                "type": "WLAN",
-                "status": wlan_status,
-                "color": wlan_color,
-                "latency": round(wlan_latency, 2), 
-                "dns": round(wlan_dns, 2),
-                "down": round(wlan_down, 1),
-                "up": round(wlan_up, 1),
-                "lat": float(metric_labels.get('latitude', '0')),
-                "lng": float(metric_labels.get('longitude', '0'))
+                "name": display_name, "id": raw_hostname, "department": department, "type": "WLAN", "status": wlan_status, "color": wlan_color,
+                "latency": round(wlan_latency, 2), "dns": round(wlan_dns, 2), "down": round(wlan_down, 1), "up": round(wlan_up, 1),
+                "lat": float(metric_labels.get('latitude', '0')), "lng": float(metric_labels.get('longitude', '0'))
             })
 
         return {"lan": lan_probes, "wlan": wlan_probes}
     except Exception as e:
         print(f"❌ DEBUG: Exception: {e}")
         return _mock_pulse_data()
-
+    
 # --- PAGE 2: COMMAND CENTER LOGIC ---
 def fetch_command_center():
     data = fetch_network_status()
@@ -591,94 +531,38 @@ def fetch_inspector_data(probe_id, duration='24h'):
     }
     return {"metrics": data, "ai_diagnoses": diagnoses, "has_wlan": has_wlan}
 
-
-# --- INDIVIDUAL PROBE FORECASTING LOGIC ---
-def fetch_probe_forecast(probe_id):
-    clean_id = probe_id.replace(" (LAN)", "").replace(" (WLAN)", "")
-    raw_hostname = next((k for k, v in HOSTNAME_MAPPING.items() if v == clean_id), clean_id)
-    
-    metrics_to_forecast = {
-        "lan_ext_down": f'LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
-        "lan_ext_up": f'LAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
-        "lan_int_down": f'LAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
-        "lan_int_up": f'LAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
-        "lan_ping_ext": f'LAN_PING{{hostname="{raw_hostname}", type="EXTERNAL", metrics="avgRTT"}}',
-        "lan_ping_int": f'LAN_PING{{hostname="{raw_hostname}", type="INTERNAL", metrics="avgRTT"}}',
-        "wlan_ext_down": f'WLAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
-        "wlan_ext_up": f'WLAN_EXTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
-        "wlan_int_down": f'WLAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Download"}}',
-        "wlan_int_up": f'WLAN_INTERNAL_SPEEDTEST{{hostname="{raw_hostname}", type="Upload"}}',
-        "wlan_ping_ext": f'WLAN_PING{{hostname="{raw_hostname}", type="EXTERNAL", metrics="avgRTT"}}',
-        "wlan_ping_int": f'WLAN_PING{{hostname="{raw_hostname}", type="INTERNAL", metrics="avgRTT"}}',
-    }
-
-    all_forecasts = {}
-
-    for metric_key, query in metrics_to_forecast.items():
-        raw_history = get_metric_history(query, hours=24, step='1h')
-        vals = [x[1] for x in raw_history] if raw_history else []
-        
-        series_max = max(vals) if vals and max(vals) > 0 else 1.0
-        norm_history = [v/series_max for v in vals] if vals else []
-
-        # DETERMINE CONTEXT
-        is_wlan = "wlan" in metric_key
-        is_ping = "ping" in metric_key
-
-        # CALL PREDICT WITH CONTEXT
-        norm_forecast = predict_future_traffic(norm_history, is_wlan=is_wlan, is_ping=is_ping)
-
-        denorm_forecast = []
-        if norm_forecast:
-            for point in norm_forecast:
-                # Add extra volatility noise for WLAN/Ping if using fallback
-                # But LSTM should now handle this natively. 
-                # We can keep a small random factor for visual realism if desired.
-                rf_val = (point['rf_load'] / 100.0) * series_max
-                lstm_val = (point['lstm_load'] / 100.0) * series_max 
-
-                denorm_forecast.append({
-                    "time": point['time'],
-                    "rf_value": round(max(0, rf_val), 1),
-                    "lstm_value": round(max(0, lstm_val), 1)
-                })
-        else:
-            now = datetime.datetime.now()
-            start_time = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-            for i in range(24):
-                denorm_forecast.append({
-                    "time": (start_time + datetime.timedelta(hours=i)).strftime("%H:00"),
-                    "rf_value": 0, "lstm_value": 0
-                })
-
-        all_forecasts[metric_key] = {
-            "history": raw_history,
-            "forecast": denorm_forecast,
-            "max": series_max 
-        }
-
-    return { 
-        "probe_name": clean_id, 
-        "data": all_forecasts 
-    }
-
+# --- PAGE 4: GLOBAL TRENDS LOGIC ---
 def fetch_trends_data():
-    data = fetch_network_status()
-    probes = data.get('wlan', [])
-    raw_history = get_metric_history('avg(LAN_EXTERNAL_SPEEDTEST{type="Download"})', hours=24, step='1h')
-    norm_history = []
-    if raw_history:
-        norm_history = [val[1] / 1000.0 for val in raw_history]
-    forecast = predict_future_traffic(norm_history)
-    if not forecast:
+    # 1. LAN Global Forecast
+    lan_hist = get_metric_history('avg(LAN_EXTERNAL_SPEEDTEST{type="Download"})', hours=48, step='1h')
+    if lan_hist:
+        lan_vals = [x[1] / 1000.0 for x in lan_hist] # Normalize 0-1 (Assumed 1Gbps capacity)
+        # Pass is_wlan=False, is_ping=False
+        lan_forecast = predict_future_traffic(lan_vals, is_wlan=False, is_ping=False)
+    else:
+        lan_forecast = []
+
+    # 2. WLAN Global Forecast
+    wlan_hist = get_metric_history('avg(WLAN_EXTERNAL_SPEEDTEST{type="Download"})', hours=48, step='1h')
+    if wlan_hist:
+        wlan_vals = [x[1] / 500.0 for x in wlan_hist] # Normalize 0-1 (Assumed 500Mbps capacity)
+        # Pass is_wlan=True, is_ping=False
+        wlan_forecast = predict_future_traffic(wlan_vals, is_wlan=True, is_ping=False)
+    else:
+        wlan_forecast = []
+
+    # Fallback Generator
+    if not lan_forecast:
         now = datetime.datetime.now()
         for i in range(24):
-            forecast.append({
-                "time": (now + datetime.timedelta(hours=i)).strftime("%H:00"),
-                "rf_load": random.randint(40, 90),
-                "lstm_load": random.randint(30, 80)
-            })
-    return {"heatmap": probes, "forecast": forecast}
+            t = (now + datetime.timedelta(hours=i)).strftime("%H:00")
+            lan_forecast.append({"time": t, "rf_load": 50, "lstm_load": 50})
+            wlan_forecast.append({"time": t, "rf_load": 50, "lstm_load": 50})
+            
+    return {
+        "lan": lan_forecast,
+        "wlan": wlan_forecast
+    }
 
 # --- MOCK DATA ---
 def _mock_pulse_data():
