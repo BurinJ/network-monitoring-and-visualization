@@ -18,7 +18,7 @@ except ImportError:
     PYTORCH_AVAILABLE = False
     print("⚠️ PyTorch not found. LSTM training will be skipped.")
 
-# Configuration imports
+# Configuration
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from config import PROMETHEUS_URL, PROM_USER, PROM_PASSWORD
@@ -39,8 +39,6 @@ def ensure_directory():
 
 def fetch_real_data(days=14):
     print(f"🔌 Connecting to Prometheus at {PROMETHEUS_URL}...")
-    t_start = time.time()
-    
     headers = {}
     if PROM_USER and PROM_PASSWORD:
         import base64
@@ -48,27 +46,20 @@ def fetch_real_data(days=14):
         headers = {"Authorization": f"Basic {auth}"}
 
     prom = PrometheusConnect(url=PROMETHEUS_URL, headers=headers, disable_ssl=True)
-    
     start_time = datetime.datetime.now() - datetime.timedelta(days=days)
     end_time = datetime.datetime.now()
     step = '1h'
 
     print(f"📥 Fetching last {days} days of metrics...")
-
     try:
         def get_df_with_host(query, col_name):
             data = prom.custom_query_range(query=query, start_time=start_time, end_time=end_time, step=step)
             if not data: return pd.DataFrame()
-            
             records = []
             for series in data:
                 host = series['metric'].get('hostname', 'unknown')
                 for val in series['values']:
-                    records.append({
-                        'timestamp': pd.to_datetime(val[0], unit='s'),
-                        'hostname': host,
-                        col_name: float(val[1])
-                    })
+                    records.append({ 'timestamp': pd.to_datetime(val[0], unit='s'), 'hostname': host, col_name: float(val[1]) })
             return pd.DataFrame(records)
 
         # Fetch Data
@@ -76,20 +67,17 @@ def fetch_real_data(days=14):
         df_lan_up = get_df_with_host('avg_over_time(LAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])', 'lan_up')
         df_wlan_down = get_df_with_host('avg_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Download"}[1h])', 'wlan_down')
         df_wlan_up = get_df_with_host('avg_over_time(WLAN_EXTERNAL_SPEEDTEST{type="Upload"}[1h])', 'wlan_up')
-        
-        # IMPORTANT: Fetch PING for multi-output training
         df_lan_ping = get_df_with_host('avg_over_time(LAN_PING{metrics="avgRTT", type="EXTERNAL"}[1h])', 'lan_ping')
 
+        # Merge
         print("   ...Processing and merging data frames...")
         dfs = [df_lan_down, df_lan_up, df_wlan_down, df_wlan_up, df_lan_ping]
         df = dfs[0]
         for d in dfs[1:]:
-            if not d.empty:
-                df = pd.merge(df, d, on=['timestamp', 'hostname'], how='outer')
-        
+            if not d.empty: df = pd.merge(df, d, on=['timestamp', 'hostname'], how='outer')
         df = df.fillna(0)
 
-        # --- CALCULATE BASELINES ---
+        # Baselines
         baselines = {}
         probes = df['hostname'].unique()
         for probe in probes:
@@ -102,7 +90,6 @@ def fetch_real_data(days=14):
                 'lan_ping_max': probe_data['lan_ping'].quantile(0.95) or 100
             }
 
-        # --- NORMALIZE & FEATURE ENGINEERING ---
         def normalize(row):
             host = row['hostname']
             if host in baselines:
@@ -116,30 +103,30 @@ def fetch_real_data(days=14):
 
         df_normalized = df.apply(normalize, axis=1)
         
-        # Time Features
+        # Time Features (Still needed for RF)
         df_normalized['hour'] = df_normalized['timestamp'].dt.hour
         df_normalized['day_of_week'] = df_normalized['timestamp'].dt.dayofweek
         df_normalized['is_weekend'] = df_normalized['day_of_week'].isin([5, 6]).astype(int)
         
-        # Add dummy ping/dns for anomaly model compatibility if missing
         for c in ['lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']:
             if c not in df_normalized.columns: df_normalized[c] = 0
 
         if len(df) > 50:
-            print(f"✅ Fetched {len(df)} real data points in {time.time() - t_start:.2f}s.")
+            print(f"✅ Fetched {len(df)} real data points.")
             return df_normalized, baselines
             
     except Exception as e:
-        print(f"⚠️ Error fetching real data: {e}")
+        print(f"⚠️ Error: {e}")
         return generate_enhanced_synthetic_data()
 
     return generate_enhanced_synthetic_data()
 
 def generate_enhanced_synthetic_data(n_samples=5000):
-    # (Simplified for brevity, ensures 2D target works)
     start = datetime.datetime.now() - datetime.timedelta(hours=n_samples)
     timestamps = [start + datetime.timedelta(hours=i) for i in range(n_samples)]
     df = pd.DataFrame({'timestamp': timestamps})
+    
+    # Time features
     df['hour'] = df['timestamp'].dt.hour
     df['day_of_week'] = df['timestamp'].dt.dayofweek
     df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
@@ -157,56 +144,42 @@ def generate_enhanced_synthetic_data(n_samples=5000):
     baselines = {"default": {"lan_down_max": 1000}}
     return df, baselines
 
+# --- LSTM UNIVERSAL MODEL (3 Inputs) ---
 if PYTORCH_AVAILABLE:
     class LSTMUniversal(nn.Module):
-        def __init__(self, input_size=6, hidden_size=64, num_layers=2, output_size=1):
+        # Input: [Value, Is_WLAN, Is_Ping] = 3 features
+        def __init__(self, input_size=3, hidden_size=64, num_layers=2, output_size=1):
             super(LSTMUniversal, self).__init__()
             self.hidden_size = hidden_size
             self.num_layers = num_layers
-            # Increased dropout to 0.3 to reduce overfitting/jitter
-            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.3)
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
             self.fc = nn.Linear(hidden_size, output_size)
 
         def forward(self, x):
-            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-            c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
+            c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
             out, _ = self.lstm(x, (h0, c0))
             out = self.fc(out[:, -1, :])
             return out
 
-    def train_lstm_model(df, seq_length=24, epochs=150, batch_size=32): # Increased epochs
-        # Select device
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"\n🧠 Training Context-Aware LSTM Model (Device: {device})...")
-        
+    def train_lstm_model(df, seq_length=24, epochs=100, batch_size=64):
+        print("\n🧠 Training Universal LSTM Model...")
         dataset_list = []
-        metrics_config = [
+        metric_cols = [
             ('lan_down', 0, 0), ('lan_up', 0, 0),
-            ('wlan_down', 1, 0), ('ping', 0, 1) # 'ping' mapped to lan_ping generic
+            ('wlan_down', 1, 0), ('lan_ping', 0, 1) 
         ]
         
-        # Prepare context-aware dataset... (Same as before)
-        # Using simplified loop for robustness
-        for col, is_wlan, is_ping in metrics_config:
-            if col == 'ping': col = 'lan_ping'
+        for col, is_wlan, is_ping in metric_cols:
             if col not in df.columns: continue
+            sub_df = pd.DataFrame()
+            sub_df['val'] = df[col]
             
-            sub_df = df[[col, 'hour', 'day_of_week', 'is_weekend']].copy()
+            max_val = sub_df['val'].max()
+            if max_val > 0: sub_df['val'] = sub_df['val'] / max_val
+            
             sub_df['is_wlan'] = is_wlan
             sub_df['is_ping'] = is_ping
-            
-            # Normalize Value using 95th percentile to handle outliers better than max()
-            # This avoids squashing normal data if one huge spike exists
-            max_val = sub_df[col].quantile(0.95)
-            if max_val > 0:
-                sub_df[col] = sub_df[col] / max_val
-                # Cap at 1.0 (or slightly higher if needed, but 1.0 is standard for 0-1 scaling)
-                sub_df[col] = sub_df[col].clip(upper=1.0)
-            
-            # Normalize time
-            sub_df['hour'] = sub_df['hour'] / 23.0
-            sub_df['day_of_week'] = sub_df['day_of_week'] / 6.0
-            
             dataset_list.append(sub_df.values)
 
         if not dataset_list: return
@@ -225,56 +198,66 @@ if PYTORCH_AVAILABLE:
         dataset = TensorDataset(X_tensor, y_tensor)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
-        # Move model to GPU
-        model = LSTMUniversal(input_size=6, output_size=1).to(device)
+        model = LSTMUniversal(input_size=3, output_size=1)
         criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001) # Slightly lower LR for stability
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         
         model.train()
-        t_start = time.time()
         for epoch in range(epochs):
             epoch_loss = 0
             for inputs, targets in loader:
-                # Move batches to GPU
-                inputs, targets = inputs.to(device), targets.to(device)
-                
                 optimizer.zero_grad()
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
                 loss.backward()
                 optimizer.step()
-                epoch_loss += loss.item() # Accumulate loss
-            print(f"   [Epoch {epoch+1}/{epochs}] Loss: {epoch_loss/len(loader):.5f}")
+                epoch_loss += loss.item()
+            
+            if 1 or (epoch + 1) % 20 == 0:
+                print(f"   [Epoch {epoch+1}/{epochs}] Loss: {epoch_loss / len(loader):.5f}")
         
-        # Move model back to CPU for saving (ensures compatibility with CPU-only inference envs)
-        model.to('cpu')
         torch.save(model.state_dict(), LSTM_MODEL_PATH)
-        print(f"✅ LSTM Model saved to: {LSTM_MODEL_PATH}")
-        print(f"   -> Training took {time.time() - t_start:.2f}s")
+        print(f"✅ LSTM Model saved.")
 
 def train_models():
     ensure_directory()
+    print("=== 🚀 Starting AI Training Pipeline ===")
+    
     df, baselines = fetch_real_data()
-    if df.empty: return
+    if df.empty: 
+        print("❌ No data available.")
+        return
 
-    # 1. Anomaly
+    # 1. Anomaly (Reduced Features)
     print("\n🧠 Training Anomaly Detection...")
-    anomaly_cols = ['hour', 'is_weekend', 'lan_down', 'lan_up', 'wlan_down', 'wlan_up', 'lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']
-    model = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
-    model.fit(df[anomaly_cols])
-    joblib.dump({'model': model, 'baselines': baselines, 'features': anomaly_cols, 'stats': {}}, ANOMALY_MODEL_PATH)
+    anomaly_cols = ['lan_down', 'lan_up', 'wlan_down', 'wlan_up', 'lan_ping', 'wlan_ping', 'lan_dns', 'wlan_dns']
+    for c in anomaly_cols: 
+        if c not in df.columns: df[c] = 0
+            
+    anomaly_model = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+    anomaly_model.fit(df[anomaly_cols])
+    
+    stats = df[anomaly_cols].describe().loc[['mean', 'std']].to_dict()
+    joblib.dump({'model': anomaly_model, 'baselines': baselines, 'features': anomaly_cols, 'stats': stats}, ANOMALY_MODEL_PATH)
+    print(f"✅ Anomaly Model saved.")
 
-    # 2. Forecast (RF) - MULTI-OUTPUT FIX
-    print("\n🔮 Training Forecast (RF)...")
+    # 2. Random Forest (Restored for Comparison)
+    print("\n🔮 Training Forecast (RF - Baseline)...")
+    # RF trains on Time Features -> LAN Download (as a general load indicator)
     X = df[['hour', 'day_of_week', 'is_weekend']]
-    y = df[['lan_down', 'lan_ping']] # Target has 2 columns now
+    y = df['lan_down']
+    
     rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
     rf_model.fit(X, y)
+    
     joblib.dump(rf_model, FORECAST_MODEL_PATH)
-    print(f"✅ RF Model Saved.")
+    print(f"✅ RF Model saved.")
 
     # 3. LSTM
-    if PYTORCH_AVAILABLE: train_lstm_model(df)
+    if PYTORCH_AVAILABLE:
+        train_lstm_model(df)
+        
+    print("\n=== ✨ Training Complete ===")
 
 if __name__ == "__main__":
     train_models()
