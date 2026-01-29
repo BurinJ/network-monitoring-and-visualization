@@ -1,3 +1,4 @@
+// EXPERIMENTAL PAGE
 import React, { useEffect, useState } from 'react';
 import { TrendingUp, Cpu, Zap, Eye, EyeOff, HelpCircle, Network, Globe } from 'lucide-react';
 

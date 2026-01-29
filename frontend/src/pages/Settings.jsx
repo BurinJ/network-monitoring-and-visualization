@@ -279,7 +279,7 @@ const Settings = () => {
                 <Cpu size={24} /> AI Model Management
               </h2>
               <p className="text-sm text-slate-500 mb-6">
-                Retrain the Anomaly Detection and Forecast models using the latest historical data from Prometheus. 
+                Retrain the Anomaly Detection using the latest historical data from Prometheus. 
                 Recommended to run once a week or after adding new probes.
               </p>
               
@@ -291,7 +291,7 @@ const Settings = () => {
                 `}
               >
                 {training ? <RefreshCw size={20} className="animate-spin" /> : <Cpu size={20} />}
-                {training ? 'Training Models...' : 'Retrain AI Models Now'}
+                {training ? 'Training Model...' : 'Retrain AI Model Now'}
               </button>
               
               {trainMsg && (

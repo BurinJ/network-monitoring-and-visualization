@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Activity, 
-  TrendingUp, 
+  Activity,  
   ChevronLeft, 
   ChevronRight, 
   LayoutDashboard,
@@ -93,7 +92,6 @@ const Sidebar = ({ isOpen, toggleSidebar, user, onLogout }) => {
             {/* Direct Link to Default Probe Inspector */}
             <NavItem to={`/inspector/${defaultProbe}`} icon={<Search size={20} />} label="Network Inspection" />
             
-            <NavItem to="/trends" icon={<TrendingUp size={20} />} label="Global Trends" />
             <NavItem to="/history" icon={<History size={20} />} label="Alert History" />
             <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" />
           </>

@@ -31,7 +31,8 @@ def log_alert(probe_id, level, category, message, details=""):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    now = datetime.datetime.now().isoformat()
+    # FIX: Use UTC to match frontend 'Z' assumption
+    now = datetime.datetime.utcnow().isoformat()
     
     # Store complex details as JSON string if needed
     if isinstance(details, dict):
@@ -44,7 +45,6 @@ def log_alert(probe_id, level, category, message, details=""):
     
     conn.commit()
     conn.close()
-    # print(f"📝 Alert Logged: [{level}] {probe_id} - {message}")
 
 def get_recent_alerts(limit=100):
     """Fetches the most recent alerts."""

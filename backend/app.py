@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from ai_engine.fetcher import fetch_network_status, fetch_command_center, fetch_inspector_data, fetch_trends_data, save_mapping, save_department_mapping
+from ai_engine.fetcher import fetch_network_status, fetch_command_center, fetch_inspector_data, save_mapping, save_department_mapping
 from ai_engine.trainer import train_models
 from ai_engine import analyzer
 import threading
@@ -48,11 +48,13 @@ def get_inspector(probe_id):
     data = fetch_inspector_data(probe_id, duration)
     return jsonify(data)
 
-
+# EXPERIMENTAL
+'''
 @app.route('/api/trends', methods=['GET'])
 def get_trends():
     data = fetch_trends_data()
     return jsonify(data)
+'''
 
 @app.route('/api/probes', methods=['GET'])
 def get_probe_list():

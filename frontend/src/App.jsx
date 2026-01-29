@@ -6,7 +6,6 @@ import Sidebar from './components/Sidebar';
 import NetworkStatus from './pages/NetworkStatus'; // Public Status Page
 import CommandCenter from './pages/CommandCenter'; // Admin Dashboard
 import Inspector from './pages/Inspector'; // Probe Details
-import Trends from './pages/Trends'; // AI Trends
 import Login from './pages/Login'; // Login Page
 import AlertHistory from './pages/AlertHistory'; // Alert
 import Settings from './pages/Settings'; // Settings
@@ -58,7 +57,6 @@ function App() {
               
               <Route path="/admin" element={user ? <CommandCenter /> : <Navigate to="/login" />} />
               <Route path="/inspector/:probeId" element={user ? <Inspector /> : <Navigate to="/login" />} />
-              <Route path="/trends" element={user ? <Trends /> : <Navigate to="/login" />} />
               <Route path="/history" element={user ? <AlertHistory /> : <Navigate to="/login" />} />
               <Route path="/settings" element={user ? <Settings /> : <Navigate to="/login" />} />
 
