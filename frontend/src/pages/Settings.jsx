@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, RefreshCw, Cpu, ChevronDown, Sliders } from 'lucide-react';
+import { Save, RefreshCw, Cpu, ChevronDown, Sliders, Filter } from 'lucide-react';
 import { API_BASE_URL } from '../config'; 
 
 const Settings = () => {
@@ -19,7 +19,10 @@ const Settings = () => {
   // Selection State
   const [selectedProbeId, setSelectedProbeId] = useState('');
   const [editName, setEditName] = useState('');
-  const [editDept, setEditDept] = useState(''); // State for Department
+  const [editDept, setEditDept] = useState(''); // State for Department Input
+  
+  // Filter State
+  const [filterDept, setFilterDept] = useState('All');
 
   useEffect(() => {
     fetchData();
@@ -49,14 +52,30 @@ const Settings = () => {
             
             setSelectedProbeId(targetProbe.id);
             setEditName(targetProbe.name);
-            // Ensure we use the department from the fetched data, falling back to empty string only if null/undefined
-            // This fix ensures 'General' or other values are preserved
             setEditDept(targetProbe.department !== undefined ? targetProbe.department : ''); 
         }
     } catch (err) {
         console.error("Failed to load settings", err);
     } finally {
         setLoading(false);
+    }
+  };
+
+  const handleFilterDeptChange = (e) => {
+    const newFilter = e.target.value;
+    setFilterDept(newFilter);
+
+    // Auto-select the first probe in the filtered list
+    const filtered = probes.filter(p => newFilter === 'All' || (p.department || 'Undefined') === newFilter);
+    if (filtered.length > 0) {
+        const first = filtered[0];
+        setSelectedProbeId(first.id);
+        setEditName(first.name);
+        setEditDept(first.department !== undefined ? first.department : '');
+    } else {
+        setSelectedProbeId('');
+        setEditName('');
+        setEditDept('');
     }
   };
 
@@ -68,7 +87,6 @@ const Settings = () => {
     const probe = probes.find(p => p.id === id);
     if (probe) {
         setEditName(probe.name);
-        // Correctly update department input from the selected probe
         setEditDept(probe.department !== undefined ? probe.department : '');
     }
   };
@@ -79,7 +97,7 @@ const Settings = () => {
     
     // Optimistic Update: Update the local list so switching back/forth keeps the new value
     setProbes(prev => prev.map(p => 
-        p.id === selectedProbeId ? { ...p, name: editName, department: editDept } : p
+        p.id === selectedProbeId ? { ...p, name: editName, department: editDept || 'General' } : p
     ));
 
     const baseUrl = typeof API_BASE_URL !== 'undefined' ? API_BASE_URL : 'http://localhost:5000/api';
@@ -89,7 +107,7 @@ const Settings = () => {
       body: JSON.stringify({ 
           id: selectedProbeId, 
           name: editName, 
-          department: editDept 
+          department: editDept || 'General' // Save as 'General' if empty to keep backend consistent
       })
     })
     .then(() => setSaving(false))
@@ -124,6 +142,12 @@ const Settings = () => {
       });
   };
 
+  // Derived state for departments
+  const uniqueDepartments = ['All', ...Array.from(new Set(probes.map(p => p.department || 'Undefined'))).sort()];
+  
+  // Filtered probes list
+  const filteredProbes = probes.filter(p => filterDept === 'All' || (p.department || 'Undefined') === filterDept);
+
   return (
     <div className="p-8 bg-teal-50 min-h-screen">
       <h1 className="text-3xl font-bold text-teal-900 mb-8">Admin Settings</h1>
@@ -143,6 +167,24 @@ const Settings = () => {
             <div className="text-center text-gray-400 py-8">Loading settings...</div>
           ) : (
             <div className="space-y-6">
+                {/* Department Filter */}
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Department</label>
+                    <div className="relative">
+                        <select 
+                            value={filterDept}
+                            onChange={handleFilterDeptChange}
+                            className="w-full p-2.5 pl-9 border border-teal-100 rounded-lg bg-teal-50 text-teal-800 text-sm font-medium appearance-none focus:outline-none focus:ring-1 focus:ring-teal-400"
+                        >
+                            {uniqueDepartments.map(dept => (
+                                <option key={dept} value={dept}>{dept}</option>
+                            ))}
+                        </select>
+                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-teal-400" size={14} />
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-teal-400 pointer-events-none" size={16} />
+                    </div>
+                </div>
+
                 <div>
                     <label className="block text-sm font-semibold text-teal-700 mb-2">Select Probe to Edit</label>
                     <div className="relative">
@@ -151,8 +193,11 @@ const Settings = () => {
                             onChange={handleSelectProbe}
                             className="w-full p-3 border border-gray-200 rounded-lg bg-gray-50 text-slate-700 font-medium appearance-none focus:outline-none focus:ring-2 focus:ring-teal-500"
                         >
-                            {probes.map(p => (
-                                <option key={p.id} value={p.id}>{p.id} ({p.name})</option>
+                            {filteredProbes.length === 0 && <option value="" disabled>No probes found</option>}
+                            {filteredProbes.map(p => (
+                                <option key={p.id} value={p.id}>
+                                    {p.id} ({p.name})
+                                </option>
                             ))}
                         </select>
                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
@@ -279,7 +324,7 @@ const Settings = () => {
                 <Cpu size={24} /> AI Model Management
               </h2>
               <p className="text-sm text-slate-500 mb-6">
-                Retrain the Anomaly Detection using the latest historical data from Prometheus. 
+                Retrain the Anomaly Detection and Forecast models using the latest historical data from Prometheus. 
                 Recommended to run once a week or after adding new probes.
               </p>
               
@@ -291,7 +336,7 @@ const Settings = () => {
                 `}
               >
                 {training ? <RefreshCw size={20} className="animate-spin" /> : <Cpu size={20} />}
-                {training ? 'Training Model...' : 'Retrain AI Model Now'}
+                {training ? 'Training Models...' : 'Retrain AI Models Now'}
               </button>
               
               {trainMsg && (
