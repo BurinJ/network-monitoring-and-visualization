@@ -10,7 +10,10 @@ DEFAULTS = {
     "wlan_ping_threshold": 200,     # ms
     "dns_threshold": 100,           # ms
     "offline_timeout_mins": 60,     # minutes
-    "speed_drop_threshold": 10      # Mbps (Absolute low limit)
+    "speed_drop_threshold": 10,      # Mbps (Absolute low limit)
+    # Anomaly Detection Config
+    "anomaly_contamination": 0.01,  # 1% (Sensitivity)
+    "anomaly_estimators": 200       # Tree count (Complexity)
 }
 
 def get_settings():

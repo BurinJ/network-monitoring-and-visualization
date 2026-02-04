@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, RefreshCw, Cpu, ChevronDown, Sliders, Filter } from 'lucide-react';
+import { Save, RefreshCw, Cpu, ChevronDown, Sliders, Activity } from 'lucide-react';
 import { API_BASE_URL } from '../config'; 
 
 const Settings = () => {
@@ -8,7 +8,9 @@ const Settings = () => {
     lan_ping_threshold: 100,
     wlan_ping_threshold: 200,
     dns_threshold: 100,
-    offline_timeout_mins: 60
+    offline_timeout_mins: 60,
+    anomaly_contamination: 0.01,
+    anomaly_estimators: 200
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -19,10 +21,7 @@ const Settings = () => {
   // Selection State
   const [selectedProbeId, setSelectedProbeId] = useState('');
   const [editName, setEditName] = useState('');
-  const [editDept, setEditDept] = useState(''); // State for Department Input
-  
-  // Filter State
-  const [filterDept, setFilterDept] = useState('All');
+  const [editDept, setEditDept] = useState(''); 
 
   useEffect(() => {
     fetchData();
@@ -42,17 +41,13 @@ const Settings = () => {
         const threshData = await threshRes.json();
         
         setProbes(probesData);
-        setThresholds(threshData);
+        setThresholds(prev => ({ ...prev, ...threshData }));
 
-        // If we have probes and none is selected, select the first one
-        if (probesData.length > 0) {
-            // Check if we already have a selection, if so, refresh its data
-            const targetId = selectedProbeId || probesData[0].id;
-            const targetProbe = probesData.find(p => p.id === targetId) || probesData[0];
-            
-            setSelectedProbeId(targetProbe.id);
-            setEditName(targetProbe.name);
-            setEditDept(targetProbe.department !== undefined ? targetProbe.department : ''); 
+        if (probesData.length > 0 && !selectedProbeId) {
+            const first = probesData[0];
+            setSelectedProbeId(first.id);
+            setEditName(first.name);
+            setEditDept(first.department || ''); 
         }
     } catch (err) {
         console.error("Failed to load settings", err);
@@ -61,29 +56,9 @@ const Settings = () => {
     }
   };
 
-  const handleFilterDeptChange = (e) => {
-    const newFilter = e.target.value;
-    setFilterDept(newFilter);
-
-    // Auto-select the first probe in the filtered list
-    const filtered = probes.filter(p => newFilter === 'All' || (p.department || 'Undefined') === newFilter);
-    if (filtered.length > 0) {
-        const first = filtered[0];
-        setSelectedProbeId(first.id);
-        setEditName(first.name);
-        setEditDept(first.department !== undefined ? first.department : '');
-    } else {
-        setSelectedProbeId('');
-        setEditName('');
-        setEditDept('');
-    }
-  };
-
   const handleSelectProbe = (e) => {
     const id = e.target.value;
     setSelectedProbeId(id);
-    
-    // Find the probe data to populate inputs
     const probe = probes.find(p => p.id === id);
     if (probe) {
         setEditName(probe.name);
@@ -94,8 +69,6 @@ const Settings = () => {
   const handleSaveName = () => {
     if (!selectedProbeId) return;
     setSaving(true);
-    
-    // Optimistic Update: Update the local list so switching back/forth keeps the new value
     setProbes(prev => prev.map(p => 
         p.id === selectedProbeId ? { ...p, name: editName, department: editDept || 'General' } : p
     ));
@@ -104,11 +77,7 @@ const Settings = () => {
     fetch(`${baseUrl}/settings/probe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-          id: selectedProbeId, 
-          name: editName, 
-          department: editDept || 'General' // Save as 'General' if empty to keep backend consistent
-      })
+      body: JSON.stringify({ id: selectedProbeId, name: editName, department: editDept || 'General' })
     })
     .then(() => setSaving(false))
     .catch(() => setSaving(false));
@@ -128,7 +97,7 @@ const Settings = () => {
 
   const handleRetrain = () => {
     setTraining(true);
-    setTrainMsg('Training in progress... This may take a few minutes.');
+    setTrainMsg('Training in progress...');
     const baseUrl = typeof API_BASE_URL !== 'undefined' ? API_BASE_URL : 'http://localhost:5000/api';
     fetch(`${baseUrl}/admin/train`, { method: 'POST' })
       .then(res => res.json())
@@ -142,18 +111,11 @@ const Settings = () => {
       });
   };
 
-  // Derived state for departments
-  const uniqueDepartments = ['All', ...Array.from(new Set(probes.map(p => p.department || 'Undefined'))).sort()];
-  
-  // Filtered probes list
-  const filteredProbes = probes.filter(p => filterDept === 'All' || (p.department || 'Undefined') === filterDept);
-
   return (
     <div className="p-8 bg-teal-50 min-h-screen">
       <h1 className="text-3xl font-bold text-teal-900 mb-8">Admin Settings</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        
         {/* Probe Naming Section */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-teal-100">
           <div className="flex justify-between items-center mb-6">
@@ -167,24 +129,6 @@ const Settings = () => {
             <div className="text-center text-gray-400 py-8">Loading settings...</div>
           ) : (
             <div className="space-y-6">
-                {/* Department Filter */}
-                <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Department</label>
-                    <div className="relative">
-                        <select 
-                            value={filterDept}
-                            onChange={handleFilterDeptChange}
-                            className="w-full p-2.5 pl-9 border border-teal-100 rounded-lg bg-teal-50 text-teal-800 text-sm font-medium appearance-none focus:outline-none focus:ring-1 focus:ring-teal-400"
-                        >
-                            {uniqueDepartments.map(dept => (
-                                <option key={dept} value={dept}>{dept}</option>
-                            ))}
-                        </select>
-                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-teal-400" size={14} />
-                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-teal-400 pointer-events-none" size={16} />
-                    </div>
-                </div>
-
                 <div>
                     <label className="block text-sm font-semibold text-teal-700 mb-2">Select Probe to Edit</label>
                     <div className="relative">
@@ -193,11 +137,8 @@ const Settings = () => {
                             onChange={handleSelectProbe}
                             className="w-full p-3 border border-gray-200 rounded-lg bg-gray-50 text-slate-700 font-medium appearance-none focus:outline-none focus:ring-2 focus:ring-teal-500"
                         >
-                            {filteredProbes.length === 0 && <option value="" disabled>No probes found</option>}
-                            {filteredProbes.map(p => (
-                                <option key={p.id} value={p.id}>
-                                    {p.id} ({p.name})
-                                </option>
+                            {probes.map(p => (
+                                <option key={p.id} value={p.id}>{p.id} ({p.name}) | {p.department || 'Undefined'}</option>
                             ))}
                         </select>
                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
@@ -224,9 +165,6 @@ const Settings = () => {
                       className="w-full bg-white border border-gray-200 rounded-lg px-3 py-3 text-slate-800 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                       placeholder="e.g. Engineering, Library, Dorm A"
                     />
-                    <p className="text-xs text-gray-400 mt-2">
-                        Used for grouping and filtering on dashboards.
-                    </p>
                 </div>
 
                 <div className="pt-4 border-t border-gray-100 flex justify-end">
@@ -251,57 +189,54 @@ const Settings = () => {
               </h2>
               
               <div className="space-y-4">
+                 {/* Standard Thresholds */}
                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max LAN Latency</label>
-                        <div className="flex items-center gap-2">
-                            <input 
-                              type="number" 
-                              value={thresholds.lan_ping_threshold}
-                              onChange={(e) => setThresholds({...thresholds, lan_ping_threshold: e.target.value})}
-                              className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900"
-                            />
-                            <span className="text-xs text-gray-400">ms</span>
-                        </div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max LAN Ping</label>
+                        <input type="number" value={thresholds.lan_ping_threshold} onChange={(e) => setThresholds({...thresholds, lan_ping_threshold: e.target.value})} className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900" />
                     </div>
                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max WLAN Latency</label>
-                        <div className="flex items-center gap-2">
-                            <input 
-                              type="number" 
-                              value={thresholds.wlan_ping_threshold}
-                              onChange={(e) => setThresholds({...thresholds, wlan_ping_threshold: e.target.value})}
-                              className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900"
-                            />
-                            <span className="text-xs text-gray-400">ms</span>
-                        </div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max WLAN Ping</label>
+                        <input type="number" value={thresholds.wlan_ping_threshold} onChange={(e) => setThresholds({...thresholds, wlan_ping_threshold: e.target.value})} className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900" />
                     </div>
                  </div>
-
                  <div className="grid grid-cols-2 gap-4">
                     <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max DNS Latency</label>
-                        <div className="flex items-center gap-2">
-                            <input 
-                              type="number" 
-                              value={thresholds.dns_threshold}
-                              onChange={(e) => setThresholds({...thresholds, dns_threshold: e.target.value})}
-                              className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900"
-                            />
-                            <span className="text-xs text-gray-400">ms</span>
-                        </div>
+                        <input type="number" value={thresholds.dns_threshold} onChange={(e) => setThresholds({...thresholds, dns_threshold: e.target.value})} className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900" />
                     </div>
                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Offline Timeout</label>
-                        <div className="flex items-center gap-2">
-                            <input 
-                              type="number" 
-                              value={thresholds.offline_timeout_mins}
-                              onChange={(e) => setThresholds({...thresholds, offline_timeout_mins: e.target.value})}
-                              className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900"
-                            />
-                            <span className="text-xs text-gray-400">min</span>
-                        </div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Offline Timeout (min)</label>
+                        <input type="number" value={thresholds.offline_timeout_mins} onChange={(e) => setThresholds({...thresholds, offline_timeout_mins: e.target.value})} className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900" />
+                    </div>
+                 </div>
+
+                 <div className="border-t border-dashed border-gray-200 my-4"></div>
+
+                 {/* Anomaly Detection Settings */}
+                 <h3 className="text-sm font-bold text-teal-700 flex items-center gap-2 mb-3">
+                    <Activity size={16} /> Anomaly Detection Config
+                 </h3>
+                 <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1" title="Lower is less sensitive">Sensitivity (Contamination)</label>
+                        <input 
+                          type="number" step="0.001" min="0.001" max="0.5"
+                          value={thresholds.anomaly_contamination} 
+                          onChange={(e) => setThresholds({...thresholds, anomaly_contamination: e.target.value})} 
+                          className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900" 
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">Default: 0.01 (1%)</p>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1" title="Higher is more complex">Model Complexity (Estimators)</label>
+                        <input 
+                          type="number" step="10" min="50" max="1000"
+                          value={thresholds.anomaly_estimators} 
+                          onChange={(e) => setThresholds({...thresholds, anomaly_estimators: e.target.value})} 
+                          className="w-full border border-gray-200 rounded p-2 text-sm font-mono text-teal-900" 
+                        />
+                         <p className="text-[10px] text-gray-400 mt-1">Default: 200</p>
                     </div>
                  </div>
 
@@ -324,8 +259,8 @@ const Settings = () => {
                 <Cpu size={24} /> AI Model Management
               </h2>
               <p className="text-sm text-slate-500 mb-6">
-                Retrain the Anomaly Detection and Forecast models using the latest historical data from Prometheus. 
-                Recommended to run once a week or after adding new probes.
+                Retrain the Anomaly Detection model using the latest historical data from Prometheus. 
+                Run this if you change the sensitivity settings above.
               </p>
               
               <button 
@@ -336,7 +271,7 @@ const Settings = () => {
                 `}
               >
                 {training ? <RefreshCw size={20} className="animate-spin" /> : <Cpu size={20} />}
-                {training ? 'Training Models...' : 'Retrain AI Models Now'}
+                {training ? 'Training...' : 'Retrain Anomaly Model'}
               </button>
               
               {trainMsg && (

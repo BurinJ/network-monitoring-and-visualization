@@ -4,25 +4,10 @@ import os
 import datetime
 import numpy as np
 
-try:
-    import torch
-    import torch.nn as nn
-    PYTORCH_AVAILABLE = True
-except ImportError:
-    PYTORCH_AVAILABLE = False
-
 MODEL_DIR = os.path.join(os.path.dirname(__file__), 'models')
 ANOMALY_PATH = os.path.join(MODEL_DIR, 'anomaly_model.pkl')
-RF_LAN_PATH = os.path.join(MODEL_DIR, 'rf_lan.pkl')
-RF_WLAN_PATH = os.path.join(MODEL_DIR, 'rf_wlan.pkl')
-LSTM_LAN_PATH = os.path.join(MODEL_DIR, 'lstm_lan.pth')
-LSTM_WLAN_PATH = os.path.join(MODEL_DIR, 'lstm_wlan.pth')
 
 ANOMALY_MODEL = None
-RF_LAN = None
-RF_WLAN = None
-LSTM_LAN = None
-LSTM_WLAN = None
 BASELINES = {}
 FEATURES = []
 DEPARTMENTS = {}
@@ -30,24 +15,8 @@ DEPARTMENTS = {}
 LAN_MAX = 1.0
 WLAN_MAX = 1.0
 
-if PYTORCH_AVAILABLE:
-    class LSTMSingle(nn.Module):
-        def __init__(self, input_size=1, hidden_size=64, num_layers=2, output_size=1):
-            super(LSTMSingle, self).__init__()
-            self.hidden_size = hidden_size
-            self.num_layers = num_layers
-            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
-            self.fc = nn.Linear(hidden_size, output_size)
-
-        def forward(self, x):
-            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-            c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-            out, _ = self.lstm(x, (h0, c0))
-            out = self.fc(out[:, -1, :])
-            return out
-
 def load_models():
-    global ANOMALY_MODEL, RF_LAN, RF_WLAN, LSTM_LAN, LSTM_WLAN, BASELINES, FEATURES, LAN_MAX, WLAN_MAX
+    global ANOMALY_MODEL, BASELINES, FEATURES, LAN_MAX, WLAN_MAX
     try:
         # 1. Load Anomaly
         if os.path.exists(ANOMALY_PATH):
@@ -58,47 +27,51 @@ def load_models():
                 FEATURES = data.get('features', [])
             else:
                 print("⚠️ Unexpected anomaly model format.")
-        
-        # 2. Load RF
-        if os.path.exists(RF_LAN_PATH): RF_LAN = joblib.load(RF_LAN_PATH)
-        if os.path.exists(RF_WLAN_PATH): RF_WLAN = joblib.load(RF_WLAN_PATH)
-
-        # 3. Load LSTM
-        if PYTORCH_AVAILABLE:
-            def load_lstm(path):
-                if not os.path.exists(path): return None, 1.0
-                try:
-                    checkpoint = torch.load(path, map_location=torch.device('cpu'))
-                    model = LSTMSingle(input_size=1)
-                    model.load_state_dict(checkpoint['model_state'])
-                    model.eval()
-                    return model, checkpoint.get('max_val', 1.0)
-                except Exception as e:
-                    print(f"❌ LSTM Load Error {path}: {e}")
-                    return None, 1.0
-
-            LSTM_LAN, LAN_MAX = load_lstm(LSTM_LAN_PATH)
-            LSTM_WLAN, WLAN_MAX = load_lstm(LSTM_WLAN_PATH)
             
         print("✅ Models loaded successfully.")
     except Exception as e:
         print(f"❌ Error loading models: {e}")
 
 load_models()
-def detect_anomaly(metrics, probe_id="default"):
-    if not ANOMALY_MODEL: return {"is_anomaly": False, "score": 0, "desc": "AI Not Initialized", "department": "Unknown"}
+
+def detect_anomaly(metrics, probe_id="default", timestamp=None):
+    """
+    Detects anomalies for a single probe based on its specific metrics.
+    
+    Args:
+        metrics (dict): The raw metric values (ping, speed, etc.)
+        probe_id (str): The ID to look up baselines.
+        timestamp (datetime): Optional. The specific time the data was recorded. 
+                              Used to correctly set 'hour' and 'is_weekend' features for historical analysis.
+    """
+    # FIX: Ensure 'causes' is returned even if AI is not ready
+    if not ANOMALY_MODEL: 
+        return {
+            "is_anomaly": False, 
+            "score": 0, 
+            "desc": "AI Not Initialized", 
+            "department": "Unknown", 
+            "causes": [] 
+        }
+    
     baseline = BASELINES.get(probe_id, BASELINES.get("default", {'lan_down_max': 1000, 'wlan_down_max': 500}))
     department = DEPARTMENTS.get(probe_id, "General")
+    
     def safe_div(n, d): return n / d if d else 0
 
+    # 1. Normalize Inputs
     norm_lan_down = safe_div(metrics.get('lan_down', 0), baseline.get('lan_down_max', 1))
     norm_lan_up = safe_div(metrics.get('lan_up', 0), baseline.get('lan_up_max', 1))
     norm_wlan_down = safe_div(metrics.get('wlan_down', 0), baseline.get('wlan_down_max', 1))
     norm_wlan_up = safe_div(metrics.get('wlan_up', 0), baseline.get('wlan_up_max', 1))
 
-    now = datetime.datetime.now()
+    # 2. Determine Time Context
+    # Use the provided timestamp (for history graphs) or current time (for live status)
+    target_time = timestamp if timestamp else datetime.datetime.now()
+
     input_data = {
-        'hour': now.hour, 'is_weekend': 1 if now.weekday() >= 5 else 0,
+        'hour': target_time.hour, 
+        'is_weekend': 1 if target_time.weekday() >= 5 else 0,
         'lan_down': norm_lan_down, 'lan_up': norm_lan_up, 'wlan_down': norm_wlan_down, 'wlan_up': norm_wlan_up,
         'lan_ping': metrics.get('lan_ping', 0), 'wlan_ping': metrics.get('wlan_ping', 0),
         'lan_dns': metrics.get('lan_dns', 0), 'wlan_dns': metrics.get('wlan_dns', 0),
@@ -248,63 +221,7 @@ def detect_anomaly(metrics, probe_id="default"):
             }
             
         return {"is_anomaly": False, "score": round(float(score), 4), "desc": "Normal", "department": department, "causes": []}
-    except Exception as e: return {"is_anomaly": False, "score": 0, "desc": f"Error: {str(e)}", "department": "Unknown", "causes": []}
-
-# EXPERIMENTAL FORECAST
-'''
-def predict_metric_trend(model_rf, model_lstm, history, max_val):
-    """
-    Predicts global trend using Univariate LSTM.
-    history: List of raw values (float)
-    """
-    forecasts = []
-    now = datetime.datetime.now()
-    start_time = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     
-    # 1. RF Prediction
-    rf_preds = []
-    if model_rf:
-        future_data = []
-        for i in range(24):
-            t = start_time + datetime.timedelta(hours=i)
-            future_data.append({'hour': t.hour, 'day_of_week': t.weekday(), 'is_weekend': 1 if t.weekday()>=5 else 0})
-        try:
-            rf_preds = model_rf.predict(pd.DataFrame(future_data)).tolist()
-        except: pass
-
-    # 2. LSTM Prediction
-    lstm_preds = []
-    seq_len = 24
-    if model_lstm and len(history) >= seq_len:
-        try:
-            # Normalize sequence using GLOBAL MAX (saved in model file)
-            norm_hist = [h / max_val for h in history[-seq_len:]]
-            curr_seq = torch.tensor(norm_hist, dtype=torch.float32).view(1, seq_len, 1)
-            
-            with torch.no_grad():
-                for _ in range(24):
-                    pred = model_lstm(curr_seq)
-                    val = max(0.0, pred.item())
-                    lstm_preds.append(val * max_val) # Denormalize
-                    
-                    new_pt = torch.tensor([[[val]]], dtype=torch.float32)
-                    curr_seq = torch.cat((curr_seq[:, 1:, :], new_pt), dim=1)
-        except Exception as e: print(e)
-
-    # 3. Combine
-    result = []
-    for i in range(24):
-        rf_val = rf_preds[i] if i < len(rf_preds) else 0
-        lstm_val = lstm_preds[i] if i < len(lstm_preds) else rf_val
-        result.append({
-            "time": (start_time + datetime.timedelta(hours=i)).strftime("%H:00"),
-            "rf": round(rf_val, 1),
-            "lstm": round(lstm_val, 1)
-        })
-    return result
-
-def predict_global_trends(lan_history, wlan_history):
-    lan_forecast = predict_metric_trend(RF_LAN, LSTM_LAN, lan_history, LAN_MAX)
-    wlan_forecast = predict_metric_trend(RF_WLAN, LSTM_WLAN, wlan_history, WLAN_MAX)
-    return { "lan": lan_forecast, "wlan": wlan_forecast }
-'''
+    except Exception as e: 
+        # FIX: Ensure causes is returned on error too
+        return {"is_anomaly": False, "score": 0, "desc": f"Error: {str(e)}", "department": "Unknown", "causes": []}

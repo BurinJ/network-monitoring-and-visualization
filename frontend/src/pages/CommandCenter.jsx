@@ -60,7 +60,6 @@ const MiniDonut = ({ label, active, total, colorClass }) => {
 const CommandCenter = () => {
   const [stats, setStats] = useState(null);
   const [networkData, setNetworkData] = useState(null);
-  const [trendsData, setTrendsData] = useState(null);
   const navigate = useNavigate();
 
   // Filter States
@@ -115,11 +114,6 @@ const CommandCenter = () => {
       })
       .catch(console.error);
       
-    // Fetch Trends Data
-    fetch('http://localhost:5000/api/trends')
-      .then(res => res.json())
-      .then(setTrendsData)
-      .catch(console.error);
   }, []);
 
   // Handle clicking outside of dropdown to close it
