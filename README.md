@@ -109,7 +109,7 @@ If you need to tweak system behaviors, check these files:
 
 `backend/settings_manager.py`: Manages the dynamic thresholds (Ping/Speed/DNS limits) adjustable via the UI.
 
-`backend/probe_mappings.json`: Stores the human-readable names assigned to raw MAC/IP addresses.
+`backend/probe_mappings.json`: Stores the human-readable names assigned to the raw hostname set on the device.
 
 # AI Model Training
 
