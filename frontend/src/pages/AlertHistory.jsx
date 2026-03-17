@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, AlertTriangle, Clock, Server, Info, Wifi, Network } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 const AlertHistory = () => {
   const [alerts, setAlerts] = useState([]);
@@ -8,7 +9,7 @@ const AlertHistory = () => {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/alerts/history?limit=50')
+    fetch(`${API_BASE_URL}/alerts/history?limit=50`)
       .then(res => res.json())
       .then(data => {
         setAlerts(data);

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, ArrowDown, ArrowUp, Activity, Filter } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 const NetworkStatus = ({ user }) => {
   const [data, setData] = useState(null);
@@ -10,7 +11,7 @@ const NetworkStatus = ({ user }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/network-status')
+    fetch(`${API_BASE_URL}/network-status`)
       .then(res => res.json())
       .then(res => { 
         setData(res); 
