@@ -4,23 +4,25 @@ KU Net is a full-stack monitoring system designed to track university network he
 
 # Tech Stack
 
-Frontend: React.js, Vite, Tailwind CSS, Recharts, Leaflet Maps
+**Frontend**: React.js, Vite, Tailwind CSS, Recharts, Leaflet Maps
 
-Backend: Python, Flask, Waitress (Production Server)
+**Backend**: Python, Flask, Waitress (Production Server)
 
-AI/ML: Scikit-Learn (Isolation Forest), Pandas, NumPy
+**AI/ML**: Scikit-Learn (Isolation Forest), Pandas, NumPy
 
-Data Source: Prometheus Time-Series Database
+**Data Source**: Prometheus Time-Series Database
 
 # Prerequisites
 
 Before running or deploying the application, ensure your environment has the following installed:
 
-**Node.js (v16 or higher)** - For building the React frontend.
+**Node.js** (v16 or higher) - For building the React frontend.
 
-**Python (v3.8 or higher)** - For running the AI backend.
+**Python** (v3.8 or higher) - For running the AI backend.
 
-**Prometheus (Optional for UI testing, Required for live data)** - The backend expects a Prometheus server to pull telemetry from.
+**Prometheus** (Optional for UI testing, Required for live data) - The backend expects a Prometheus server to pull telemetry from.
+
+> **_NOTE:_** For accurate data, Request the access to Prometheus Database from Office of Computer Service.
 
 # Local Development Setup (Hot-Reloading)
 
@@ -62,36 +64,38 @@ You can now access the development UI at http://localhost:5173.
 
 To deploy the application as a unified production build (where Python serves the compiled React app), we use the provided automated batch script.
 
-Step-by-Step Deployment
+## Step-by-Step Deployment
 
-Open Command Prompt or PowerShell.
+1. Open Command Prompt or PowerShell.
 
-Navigate to the root directory of the project.
+2. Navigate to the root directory of the project.
 
-Run the deployment script:
+3. Run the deployment script:
 
+```
 deploy.bat
+```
 
 
-What deploy.bat does automatically:
+**What deploy.bat does automatically**:
 
-Installs Frontend Dependencies: Runs npm install in the /frontend folder.
+**Installs Frontend Dependencies**: Runs npm install in the /frontend folder.
 
-Builds the React App: Runs npm run build to compile the optimized static frontend.
+**Builds the React App**: Runs npm run build to compile the optimized static frontend.
 
-Moves the Build: Takes the frontend/dist folder and moves it to backend/static_frontend.
+**Moves the Build**: Takes the frontend/dist folder and moves it to backend/static_frontend.
 
-Prepares the Python Environment: Creates a virtual environment (if missing) and installs requirements (including Waitress).
+**Prepares the Python Environment**: Creates a virtual environment (if missing) and installs requirements (including Waitress).
 
-Starts the Server: Launches a robust production WSGI server (Waitress) on 0.0.0.0:5000.
+**Starts the Server**: Launches a robust production WSGI server (Waitress) on 0.0.0.0:5000.
 
-Accessing the Live Dashboard
+## Accessing the Live Dashboard
 
-Once deploy.bat finishes, the server will keep running in that terminal window.
+Once `deploy.bat` finishes, the server will keep running in that terminal window.
 
-From the Server itself: Open http://localhost:5000
+From the Server itself: Open `http://localhost:5000`
 
-From Outside (via VPN or LAN): Open http://<SERVER_IP_ADDRESS>:5000 (e.g., http://192.168.1.50:5000)
+From Outside (via VPN or LAN): Open `http://<SERVER_IP_ADDRESS>:5000` (e.g., `http://192.168.1.50:5000`)
 
 (Note: The frontend is configured to use relative API paths in production, so accessing it via the external IP will seamlessly route API calls back to the same IP).
 
@@ -99,13 +103,13 @@ From Outside (via VPN or LAN): Open http://<SERVER_IP_ADDRESS>:5000 (e.g., http:
 
 If you need to tweak system behaviors, check these files:
 
-frontend/src/config.js: Handles the API URL switching between Development (Localhost) and Production (Relative IP).
+`frontend/src/config.js`: Handles the API URL switching between Development (Localhost) and Production (Relative IP).
 
-backend/config.py: Contains the connection details for your Prometheus server (PROMETHEUS_URL, PROM_USER, PROM_PASSWORD).
+`backend/config.py`: Contains the connection details for your Prometheus server (`PROMETHEUS_URL`, `PROM_USER`, `PROM_PASSWORD`).
 
-backend/settings_manager.py: Manages the dynamic thresholds (Ping/Speed/DNS limits) adjustable via the UI.
+`backend/settings_manager.py`: Manages the dynamic thresholds (Ping/Speed/DNS limits) adjustable via the UI.
 
-backend/probe_mappings.json: Stores the human-readable names assigned to raw MAC/IP addresses.
+`backend/probe_mappings.json`: Stores the human-readable names assigned to raw MAC/IP addresses.
 
 # AI Model Training
 
