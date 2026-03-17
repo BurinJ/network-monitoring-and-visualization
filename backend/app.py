@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from ai_engine.fetcher import fetch_network_status, fetch_command_center, fetch_inspector_data, save_mapping, save_department_mapping
 from ai_engine.trainer import train_models
@@ -7,8 +7,9 @@ import threading
 import time
 import history
 import settings_manager
+import os
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static_client')
 CORS(app) 
 
 # --- BACKGROUND MONITOR ---
@@ -24,8 +25,21 @@ def background_monitor():
 monitor_thread = threading.Thread(target=background_monitor, daemon=True)
 monitor_thread.start()
 
-@app.route('/')
-def home():
+# --- SERVE REACT FRONTEND (THE FIX) ---
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        # Fallback to index.html for React Router (Single Page App)
+        return send_from_directory(app.static_folder, 'index.html')
+
+# --- API ENDPOINTS ---
+
+# Moved the status check here       
+@app.route('/api/health')
+def health_check():
     return jsonify({"status": "University Monitor API is Running", "version": "1.0"})
 
 @app.route('/api/network-status', methods=['GET'])

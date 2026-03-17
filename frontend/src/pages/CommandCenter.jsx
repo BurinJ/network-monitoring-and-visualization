@@ -2,9 +2,10 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 // Import Leaflet components (Error handling if not installed)
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet';
-import { Filter, AlertCircle, AlertTriangle, Cpu, ChevronDown, Check, X, Layers, Network, Wifi, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Filter, Cpu, ChevronDown, Check, Layers, Network, Wifi, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { API_BASE_URL } from '../config';
 
 // Fix Leaflet's default icon issue in React
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -87,7 +88,7 @@ const CommandCenter = () => {
 
   useEffect(() => {
     // Fetch Command Center Stats
-    fetch('http://localhost:5000/api/command-center')
+    fetch(`${API_BASE_URL}/command-center`)
       .then(res => res.json())
       .then(data => {
         setStats(data);
@@ -104,7 +105,7 @@ const CommandCenter = () => {
       .catch(console.error);
 
     // Fetch Network Status (Used for donut, filters, and heatmap)
-    fetch('http://localhost:5000/api/network-status')
+    fetch(`${API_BASE_URL}/network-status`)
       .then(res => res.json())
       .then(data => {
         setNetworkData(data);

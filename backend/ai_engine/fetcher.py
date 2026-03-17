@@ -307,16 +307,28 @@ def fetch_command_center():
     for p in all_interfaces:
         if p['color'] != 'green':
             issues.append({"location": f"{p['name']} ({p['type']})", "issue": p['status'], "severity": "High" if p['color'] == 'red' else "Medium"})
-    map_markers = []
+    map_markers = {}
     for p in all_interfaces:
         if p.get('lat') == 0 or p.get('lng') == 0: continue
         key = p['name']
-        existing = next((m for m in map_markers if m['name'] == key), None)
-        if not existing:
-            existing = { "name": p['name'], "lat": p['lat'], "lng": p['lng'], "status": "Healthy", "color": "green" }
-            map_markers.append(existing)
-        if p['color'] == 'red': existing['status'] = "Critical"; existing['color'] = "red"
-        elif p['color'] == 'orange' and existing['color'] != 'red': existing['status'] = "Warning"; existing['color'] = "orange"
+        if key not in map_markers:
+            map_markers[key] = {
+                "name": p['name'],
+                "lat": p['lat'],
+                "lng": p['lng'],
+                "status": "Healthy", 
+                "color": "green"
+            }
+        
+        # Determine worst status for map pin
+        current = map_markers[key]
+        if p['color'] == 'red':
+            current['status'] = "Critical"
+            current['color'] = "red"
+        elif p['color'] == 'orange' and current['color'] != 'red':
+            current['status'] = "Warning"
+            current['color'] = "orange"
+
     return { "alerts": down_count, "bandwidth": round(avg_bw, 1), "satisfaction": 95, "total_probes": len(all_interfaces), "active_probes": len(all_interfaces) - down_count, "priority_issues": issues, "map_markers": list(map_markers.values()) }
 
 # --- PAGE 3: INSPECTOR LOGIC ---
